@@ -1,0 +1,37 @@
+{
+  "default_model": "qwen2.5-7b",
+
+  "models": {
+    "qwen2.5-7b": {
+      "label": "Qwen 2.5 7b Instruct",
+      "hf_id": "Qwen/Qwen2.5-7b-Instruct",
+      "max_new_tokens": 128,
+      "temperature": 0.0,
+      "top_p": 1.0
+    },
+
+    "llama3.3-70b-instruct-fp16": {
+      "label": "Llama 3.3 70b Instruct (FP16)",
+      "hf_id": "meta-llama/Llama-3.3-70b-Instruct",
+      "max_new_tokens": 128,
+      "temperature": 0.0,
+      "top_p": 1.0
+    },
+
+    "gpt-oss-20b": {
+      "label": "GPT-OSS 20b",
+      "hf_id": "openai/gpt-oss-20b",
+      "max_new_tokens": 128,
+      "temperature": 0.0,
+      "top_p": 1.0
+    },
+
+    "gpt-oss-120b": {
+      "label": "GPT-OSS 120b",
+      "hf_id": "openai/gpt-oss-120b",
+      "max_new_tokens": 128,
+      "temperature": 0.0,
+      "top_p": 1.0
+    }
+  }
+}

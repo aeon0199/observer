@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile check
+        run: |
+          python -m py_compile baseline_hysteresis/runner.py
+          python -m py_compile intervention_engine/intervention.py
+          python -m py_compile intervention_engine/trajectory.py
+          python -m py_compile intervention_engine/diagnostics_bridge.py
+          python -m py_compile intervention_engine/backend.py
+          python -m py_compile intervention_engine/sae_adapter.py
+          python -m py_compile adaptive_controller/adaptive_loop.py
+          python -m py_compile adaptive_controller/adaptive_runner.py
+          python -m py_compile adaptive_controller/dashboard.py

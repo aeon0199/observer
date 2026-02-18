@@ -1,0 +1,4 @@
+sae-lens>=0.5.15
+nnsight>=0.5.15
+pandas>=2.2
+plotly>=5.24

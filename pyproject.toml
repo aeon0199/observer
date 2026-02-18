@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-stability-runtime"
+version = "0.1.0"
+description = "Inference-time stability experiments for LLMs (baseline_hysteresis/intervention_engine/adaptive_controller)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "torch>=2.4.0",
+  "transformers>=4.45",
+]
+
+[project.optional-dependencies]
+research = [
+  "sae-lens>=0.5.15",
+  "nnsight>=0.5.15",
+  "pandas>=2.2",
+  "plotly>=5.24",
+]
