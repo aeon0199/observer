@@ -177,7 +177,7 @@ adaptive_controller_system4/ closed-loop adaptive controller
   author = {Malone, Josh},
   title  = {observer: Closed-loop stability control for language model inference},
   year   = {2026},
-  url    = {https://github.com/aeon0199/llm-stability-runtime}
+  url    = {https://github.com/aeon0199/observer}
 }
 ```
 
