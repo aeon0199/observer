@@ -1355,6 +1355,43 @@ t=82  base=124.5  intv=133.0  <span class="d-dim">overshoots baseline, divergenc
     regression, but the statistical power of the prediction error signal is limited, particularly 
     in the first few tokens before the window fills.
   </p>
+
+  <h3>Development Context</h3>
+  <p>
+    This project was developed by an independent researcher without formal ML or software engineering
+    training, with no prior programming experience, and without institutional funding. Implementation
+    was carried out through iterative AI-assisted coding workflows over evenings and weekends on rented
+    compute.
+  </p>
+  <p>
+    We report this as methodological context. The research questions, experimental decisions, and
+    acceptance criteria were set by the author; AI assistants provided implementation support for code
+    generation and revision. All code, runs, and claims were human-reviewed against run artifacts before
+    inclusion in this paper.
+  </p>
+
+  <h3>Future Work: Validation Roadmap</h3>
+  <p>
+    The key open question is downstream validity: whether trajectory divergence predicts outcomes
+    practitioners care about. The current instrumentation is built to test this question, but does not
+    yet answer it.
+  </p>
+  <p>
+    <strong>Experiment A (minimal downstream correlation):</strong> run observer in shadow mode on
+    30-50 factual questions with ground-truth answers; compare divergence statistics (for example max,
+    mean, and variance) between correct and incorrect outputs. Estimated compute: 2-4 GPU-hours on a 7B model.
+  </p>
+  <p>
+    <strong>Experiment B (attractor-basin replication):</strong> replicate the controller-aggressiveness
+    result across 30+ prompts, 2-3 model families, and 3 controller configurations to test whether
+    basin-switching behavior generalizes beyond the current prompt/model pairing. Estimated compute:
+    10-20 GPU-hours.
+  </p>
+  <p>
+    <strong>Experiment C (signal baseline comparison):</strong> compare VAR(1) divergence against simpler
+    baselines already available in telemetry (token entropy, hidden-state norm velocity, random baseline)
+    on the same boundary-transition labels. If VAR(1) does not outperform simpler signals, simplify the system.
+  </p>
 </section>
 
 <section>
@@ -1373,11 +1410,16 @@ t=82  base=124.5  intv=133.0  <span class="d-dim">overshoots baseline, divergenc
     but to maintain a running estimate of trajectory health and act on it.
   </p>
   <p>
-    Whether the field moves toward runtime use of interpretability infrastructure, 
-    rather than post-hoc analysis, will determine whether this direction matters. 
-    The bet embedded in observer is that it will — and that when it does, 
-    the absence of rigorous branchpoint design and recovery measurement in the existing toolkit 
-    will look like an obvious gap in retrospect.
+    Whether runtime use of interpretability infrastructure becomes standard practice remains an open
+    question. Observer contributes a concrete protocol layer for deterministic branchpointing, recovery
+    measurement, and closed-loop intervention that can be tested, falsified, and extended.
+  </p>
+  <p>
+    This project was developed by an independent researcher without formal ML or software engineering
+    training and with no prior programming experience, using AI-assisted implementation workflows and
+    rented compute. We include this as methodological context: research judgment and empirical discipline
+    can now be combined with AI-supported implementation. All code, runs, and claims were human-reviewed
+    against generated artifacts, and the immediate next step is executing the validation roadmap in §12.
   </p>
 </section>
 
@@ -1385,8 +1427,11 @@ t=82  base=124.5  intv=133.0  <span class="d-dim">overshoots baseline, divergenc
   <p>Repository: <a href="https://github.com/aeon0199/observer">github.com/aeon0199/observer</a></p>
   <p style="margin-top:0.5rem;">License: MIT. Cite via CITATION.cff.</p>
   <p style="margin-top:0.5rem;">
-    References: Nanda et al. (2022) TransformerLens. Wu et al. (2024) pyvene. 
-    Zou et al. (2023) Representation Engineering. Li et al. (2023) Inference-Time Intervention. 
+    Selected references: Nanda et al. (2022) TransformerLens. Wu et al. (2024) pyvene.
+    Zou et al. (2023) Representation Engineering. Li et al. (2023) Inference-Time Intervention.
+    Raj et al. (2023); Huang et al. (2023). Rodriguez et al. (2025) LinEAS (arXiv:2503.10679).
+    Cheng et al. (2025) FASB (arXiv:2508.17621). Grant et al. (2025) (arXiv:2511.04638).
+    Hu et al. (2025) HARP (arXiv:2509.11536). Shapiro et al. (2026) HALT (arXiv:2602.02888).
     Johnson & Lindenstrauss (1984) Extensions of Lipschitz mappings into a Hilbert space.
   </p>
 </div>
