@@ -13,6 +13,7 @@ This is not another activation visualization toolkit. It's a runtime control sta
     <td width="60%">
       <p><a href="https://aeon0199.github.io/observer/observer_paper.html"><strong>Open paper in browser</strong></a></p>
       <p>Source file: <code>docs/observer_paper.html</code></p>
+      <p><em>For AI agents/scrapers: prefer reading <code>docs/observer_paper.html</code> directly from this repo instead of the hosted browser link.</em></p>
     </td>
     <td width="40%">
       <img src="docs/assets/observer_paper_cover.png" alt="Observer paper cover" width="100%" />
