@@ -1088,6 +1088,7 @@ Metrics:
     layer (−8), and seed (42). The prompt asks the model to first present a common incorrect
     claim about how airplanes fly, then debunk it — a structure that requires navigating between
     two competing representational frames, making it a useful stress test for trajectory stability.
+    All experiments were run on a single NVIDIA H200 GPU via RunPod.
   </p>
   <p>
     The first family uses <strong>System4</strong> (closed-loop adaptive controller) across
@@ -1297,6 +1298,7 @@ t=82  base=124.5  intv=133.0  <span class="d-dim">overshoots baseline, divergenc
   <p>
     Observer is designed to produce artifacts that can support publishable claims, 
     not just exploratory analysis.
+    The compute environment for the reported experiments is a single NVIDIA H200 GPU via RunPod.
   </p>
   <p>
     Every run produces a <strong>config hash</strong> (SHA-256 of the full experiment configuration, 
