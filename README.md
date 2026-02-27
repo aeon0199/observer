@@ -172,7 +172,8 @@ adaptive_controller_system4/ closed-loop adaptive controller
 
 ## Paper
 
-- `docs/observer_paper.html` (rendered research paper)
+- [Open paper in browser](https://aeon0199.github.io/observer/observer_paper.html)
+- Source file: `docs/observer_paper.html`
 
 ---
 
