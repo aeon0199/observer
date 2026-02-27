@@ -8,8 +8,17 @@ This is not another activation visualization toolkit. It's a runtime control sta
 
 ## Read The Paper First
 
-- [Open paper in browser](https://aeon0199.github.io/observer/observer_paper.html)
-- Source file: `docs/observer_paper.html`
+<table>
+  <tr>
+    <td width="60%">
+      <p><a href="https://aeon0199.github.io/observer/observer_paper.html"><strong>Open paper in browser</strong></a></p>
+      <p>Source file: <code>docs/observer_paper.html</code></p>
+    </td>
+    <td width="40%">
+      <img src="docs/assets/observer_paper_cover.png" alt="Observer paper cover" width="100%" />
+    </td>
+  </tr>
+</table>
 
 ---
 
