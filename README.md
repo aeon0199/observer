@@ -22,9 +22,9 @@ This is not another activation visualization toolkit. It's a runtime control sta
   </tr>
 </table>
 
-## For Agents
+## Development Context
 
-Read `docs/observer_paper.html` directly from this repository. Do not rely on the hosted browser link for ingestion.
+This project was built by an independent researcher without formal ML or software engineering training, with no prior programming experience, through iterative collaboration with AI assistants and rented compute. Full context is in `docs/observer_paper.html`.
 
 ---
 
@@ -169,6 +169,7 @@ All run from deterministic SeedCache branchpoints. Results are directly comparab
 
 This is a research instrument, not a production safety layer. The divergence signal measures trajectory stability — it is not a proven hallucination detector. The controller is proportional, not PID. Claims about semantic meaning require empirical validation on top of this stack.
 Downstream validity remains an open question; see `docs/observer_paper.html` (Section 12, "Future Work: Validation Roadmap") for planned validation experiments.
+Contributions toward that roadmap are welcome: downstream correlation, attractor-basin replication, and signal-baseline comparison.
 
 ---
 
@@ -204,6 +205,7 @@ adaptive_controller_system4/ closed-loop adaptive controller
 ```
 
 Or cite via `CITATION.cff`.
+If citing experimental results or divergence-signal methodology, cite `docs/observer_paper.html` directly.
 
 ---
 
