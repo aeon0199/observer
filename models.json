@@ -1,0 +1,15 @@
+{
+  "default_model": "gpt2",
+  "models": {
+    "tinyllama": {
+      "hf_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+      "device": "cuda",
+      "torch_dtype": "float16"
+    },
+    "gpt2": {
+      "hf_id": "gpt2",
+      "device": "cpu",
+      "torch_dtype": "float32"
+    }
+  }
+}

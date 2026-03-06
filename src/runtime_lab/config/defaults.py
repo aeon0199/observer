@@ -1,0 +1,2 @@
+DEFAULT_RUNS_DIR = "runs"
+DEFAULT_MODEL_REGISTRY = "models.json"
