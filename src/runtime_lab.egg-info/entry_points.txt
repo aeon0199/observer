@@ -1,2 +1,0 @@
-[console_scripts]
-runtime-lab = runtime_lab.cli.main:main
