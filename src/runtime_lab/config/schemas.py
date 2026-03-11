@@ -38,6 +38,11 @@ class StressConfig(CommonRunConfig):
 
 
 @dataclass
+class HysteresisConfig(CommonRunConfig):
+    original_question_label: str = "ORIGINAL_QUESTION"
+
+
+@dataclass
 class ControlConfig(CommonRunConfig):
     measure_layer: int = -1
     act_layer: int = -1

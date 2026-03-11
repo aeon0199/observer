@@ -11,7 +11,7 @@ import torch
 
 from runtime_lab.config.schemas import ControlConfig, DiagnosticsConfig
 from runtime_lab.core.backend.loader import load_model_with_backend
-from runtime_lab.core.diagnostics.manager import DiagnosticsManager
+from runtime_lab.core.diagnostics.manager import DiagnosticsManager, summarize_diagnostics_health
 from runtime_lab.core.interventions.factory import build_intervention
 from runtime_lab.core.interventions.scaling import DynamicScalingIntervention, ScaleState
 from runtime_lab.core.io.artifacts import ensure_dir
@@ -81,10 +81,7 @@ def run_control_experiment(
         "prompt": config.prompt,
         "model": model_id,
         "backend": backend_result.backend,
-        "backend_meta": {
-            "remote": bool(backend_result.backend_meta.get("remote", False)),
-            "device_map": backend_result.backend_meta.get("device_map", str(device)),
-        },
+        "backend_meta": dict(backend_result.backend_meta),
         "max_new_tokens": int(config.max_new_tokens),
         "measure_layer": int(config.measure_layer),
         "act_layer": int(config.act_layer),
@@ -161,6 +158,11 @@ def run_control_experiment(
         print(f"{Color.BOLD}Config hash:{Color.RESET} {cfg_hash}")
         print(f"{Color.BOLD}Model:{Color.RESET} {model_id}")
         print(f"{Color.BOLD}Backend:{Color.RESET} {backend_result.backend}")
+        print(f"{Color.BOLD}Device:{Color.RESET} {backend_result.backend_meta.get('resolved_device', str(device))}")
+        print(f"{Color.BOLD}DType:{Color.RESET} {backend_result.backend_meta.get('resolved_dtype', 'unknown')}")
+        notes = backend_result.backend_meta.get("policy_notes", []) or []
+        if notes:
+            print(f"{Color.BOLD}Runtime policy:{Color.RESET} {'; '.join(str(note) for note in notes)}")
         print(f"{Color.BOLD}Intervention:{Color.RESET} {intervention_name}")
         print(f"{Color.BOLD}Shadow mode:{Color.RESET} {bool(config.shadow)}")
         print(f"{Color.BOLD}Prompt:{Color.RESET} {config.prompt}")
@@ -303,12 +305,19 @@ def run_control_experiment(
         "run_dir": str(run_dir),
         "model_id": model_id,
         "backend": backend_result.backend,
+        "runtime": {
+            "device": str(device),
+            "resolved_dtype": backend_result.backend_meta.get("resolved_dtype"),
+            "policy_notes": backend_result.backend_meta.get("policy_notes", []),
+            "backend_meta": dict(backend_result.backend_meta),
+        },
         "intervention_type": str(config.intervention_type),
         "intervention_name": str(intervention_name),
         "shadow": bool(config.shadow),
         "tokens": int(n_tokens),
         "avg_raw_div_mean": float(sum_raw_div / max(1, n_tokens)),
         "avg_score_mean": float(sum_avg_score / max(1, n_tokens)),
+        "diagnostics_health": summarize_diagnostics_health([event.get("diagnostics", {}) for event in events_cache]),
         "status_counts": {
             "WARNING": int(n_warning),
             "CRITICAL": int(n_critical),

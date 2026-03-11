@@ -2,7 +2,7 @@ from .predictor import DivergenceDetails, DivergencePredictor
 from .spectral import spectral_energy_metrics
 from .layer_probe import LayerProbe, LayerProbeConfig
 from .windowed_svd import WindowedSVDProbe, WindowedSVDProbeConfig
-from .manager import DiagnosticsManager
+from .manager import DiagnosticsManager, summarize_diagnostics_health
 
 __all__ = [
     "DivergencePredictor",
@@ -13,4 +13,5 @@ __all__ = [
     "WindowedSVDProbe",
     "WindowedSVDProbeConfig",
     "DiagnosticsManager",
+    "summarize_diagnostics_health",
 ]

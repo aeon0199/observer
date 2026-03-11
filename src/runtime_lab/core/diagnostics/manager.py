@@ -11,6 +11,34 @@ from .spectral import spectral_energy_metrics
 from .windowed_svd import WindowedSVDProbe, WindowedSVDProbeConfig
 
 
+def summarize_diagnostics_health(records: list[Dict]) -> Dict:
+    total = 0
+    degraded = 0
+    invalid = 0
+    issue_counts: Dict[str, int] = {}
+
+    for diagnostics in records:
+        if not diagnostics:
+            continue
+        total += 1
+        health = diagnostics.get("health", {}) or {}
+        if health.get("degraded"):
+            degraded += 1
+        if health.get("valid") is False:
+            invalid += 1
+        for item in health.get("issues", []) or []:
+            issue = str(item.get("issue", "unknown"))
+            issue_counts[issue] = int(issue_counts.get(issue, 0) + 1)
+
+    return {
+        "steps_observed": int(total),
+        "degraded_steps": int(degraded),
+        "invalid_steps": int(invalid),
+        "ok": bool(invalid == 0),
+        "issue_counts": issue_counts,
+    }
+
+
 class DiagnosticsManager:
     def __init__(self, config: Optional[DiagnosticsConfig] = None):
         self.config = config or DiagnosticsConfig()
@@ -67,26 +95,42 @@ class DiagnosticsManager:
             return {}
 
         out: Dict = {}
+        health: Dict = {"enabled": True, "valid": True, "degraded": False, "issues": []}
 
         try:
             out["divergence"] = float(self.predictor.step(hidden))
+            predictor_health = getattr(self.predictor, "last_health", None) or {}
+            health["valid"] = bool(predictor_health.get("valid", True))
+            health["degraded"] = bool(predictor_health.get("degraded", False))
+            health["issues"].extend(list(predictor_health.get("issues", []) or []))
         except Exception as e:
             out["divergence_error"] = str(e)
+            health["valid"] = False
+            health["degraded"] = True
+            health["issues"].append({"issue": "predictor_exception", "message": str(e)})
 
         try:
             out["spectral"] = spectral_energy_metrics(hidden)
         except Exception as e:
             out["spectral_error"] = str(e)
+            health["degraded"] = True
+            health["issues"].append({"issue": "spectral_exception", "message": str(e)})
 
         try:
             out["svd"] = self.svd_probe.step(hidden)
         except Exception as e:
             out["svd_error"] = str(e)
+            health["degraded"] = True
+            health["issues"].append({"issue": "svd_exception", "message": str(e)})
 
         if self.layer_probe is not None:
             try:
                 out["layer_stiffness"] = self.layer_probe.step(layer_states or {})
             except Exception as e:
                 out["layer_stiffness_error"] = str(e)
+                health["degraded"] = True
+                health["issues"].append({"issue": "layer_probe_exception", "message": str(e)})
+
+        out["health"] = health
 
         return out

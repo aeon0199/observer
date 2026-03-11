@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from . import control as control_cli
+from . import hysteresis as hysteresis_cli
 from . import observe as observe_cli
 from . import stress as stress_cli
 
@@ -17,6 +18,9 @@ def main() -> None:
     stress_parser = sub.add_parser("stress", help="Branchpoint intervention stress test")
     stress_cli.add_stress_args(stress_parser)
 
+    hysteresis_parser = sub.add_parser("hysteresis", help="BASE -> PERTURB -> REASK protocol")
+    hysteresis_cli.add_hysteresis_args(hysteresis_parser)
+
     control_parser = sub.add_parser("control", help="Closed-loop adaptive control run")
     control_cli.add_control_args(control_parser)
 
@@ -26,6 +30,8 @@ def main() -> None:
         observe_cli.run_from_args(args)
     elif args.mode == "stress":
         stress_cli.run_from_args(args)
+    elif args.mode == "hysteresis":
+        hysteresis_cli.run_from_args(args)
     elif args.mode == "control":
         control_cli.run_from_args(args)
     else:

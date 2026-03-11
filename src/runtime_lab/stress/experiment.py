@@ -8,7 +8,7 @@ import torch
 
 from runtime_lab.config.schemas import DiagnosticsConfig, StressConfig
 from runtime_lab.core.backend.loader import load_model_with_backend
-from runtime_lab.core.diagnostics.manager import DiagnosticsManager
+from runtime_lab.core.diagnostics.manager import DiagnosticsManager, summarize_diagnostics_health
 from runtime_lab.core.interventions.factory import build_intervention
 from runtime_lab.core.io.artifacts import ensure_dir
 from runtime_lab.core.io.hashing import hash_config
@@ -200,10 +200,7 @@ def run_stress_experiment(
         "prompt": config.prompt,
         "model": model_id,
         "backend": backend_result.backend,
-        "backend_meta": {
-            "remote": bool(backend_result.backend_meta.get("remote", False)),
-            "device_map": backend_result.backend_meta.get("device_map", str(device)),
-        },
+        "backend_meta": dict(backend_result.backend_meta),
         "max_new_tokens": int(config.max_new_tokens),
         "intervention_layer": int(config.intervention_layer),
         "intervention_type": str(config.intervention_type),
@@ -310,6 +307,16 @@ def run_stress_experiment(
         "timestamp": stamp,
         "mode": "stress",
         "config": run_config,
+        "runtime": {
+            "device": str(device),
+            "resolved_dtype": backend_result.backend_meta.get("resolved_dtype"),
+            "policy_notes": backend_result.backend_meta.get("policy_notes", []),
+            "backend_meta": dict(backend_result.backend_meta),
+        },
+        "diagnostics_health": {
+            "baseline": summarize_diagnostics_health([state.diagnostics for state in baseline_trajectory.states]),
+            "intervention": summarize_diagnostics_health([state.diagnostics for state in intervention_trajectory.states]),
+        },
         "metrics": {
             "primary_metric": comparison.primary_metric,
             "deviation_during": comparison.deviation_during,

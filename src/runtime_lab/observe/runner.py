@@ -10,7 +10,7 @@ import torch
 
 from runtime_lab.config.schemas import CommonRunConfig, DiagnosticsConfig
 from runtime_lab.core.backend.loader import load_model_with_backend
-from runtime_lab.core.diagnostics.manager import DiagnosticsManager
+from runtime_lab.core.diagnostics.manager import DiagnosticsManager, summarize_diagnostics_health
 from runtime_lab.core.io.artifacts import ensure_dir
 from runtime_lab.core.io.hashing import hash_config
 from runtime_lab.core.io.json import save_json
@@ -69,10 +69,7 @@ def run_observe_experiment(
         "prompt": config.prompt,
         "model": model_id,
         "backend": backend_result.backend,
-        "backend_meta": {
-            "remote": bool(backend_result.backend_meta.get("remote", False)),
-            "device_map": backend_result.backend_meta.get("device_map", str(device)),
-        },
+        "backend_meta": dict(backend_result.backend_meta),
         "max_new_tokens": int(config.max_new_tokens),
         "seed": int(config.seed) if config.seed is not None else None,
     }
@@ -152,8 +149,15 @@ def run_observe_experiment(
         "run_dir": str(run_dir),
         "model_id": model_id,
         "backend": backend_result.backend,
+        "runtime": {
+            "device": str(device),
+            "resolved_dtype": backend_result.backend_meta.get("resolved_dtype"),
+            "policy_notes": backend_result.backend_meta.get("policy_notes", []),
+            "backend_meta": dict(backend_result.backend_meta),
+        },
         "tokens": int(n_tokens),
         "avg_divergence": float(sum_div / max(1, n_tokens)),
+        "diagnostics_health": summarize_diagnostics_health([event.get("diagnostics", {}) for event in events]),
         "artifacts": {
             "run_dir": str(run_dir),
             "events_path": str(events_path),

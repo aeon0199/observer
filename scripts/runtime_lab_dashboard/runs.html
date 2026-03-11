@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Runtime Lab Run Archive</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600;9..144,800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body data-page="archive">
+    <div class="grid-shell archive-shell">
+      <header class="hero panel">
+        <div class="hero-copy">
+          <nav class="top-nav" aria-label="Dashboard">
+            <a class="nav-link" href="/">Mission Control</a>
+            <a class="nav-link is-active" href="/runs.html">Run Archive</a>
+          </nav>
+          <p class="eyebrow">Saved Experiments</p>
+          <h1>Run Archive</h1>
+          <p class="lede">
+            Browse finished runs, compare summary metrics, preview artifacts inline, and open any
+            HTML dashboard outputs without crowding the live launch screen.
+          </p>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric">
+            <span class="metric-label">Repo</span>
+            <strong id="repo-root">Loading…</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Runs Dir</span>
+            <strong id="runs-dir">Loading…</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Status</span>
+            <strong id="hero-status">Idle</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="panel runs-panel archive-runs-panel">
+        <div class="section-head">
+          <p class="eyebrow">Library</p>
+          <h2>Saved Runs</h2>
+        </div>
+        <div id="runs-list" class="runs-list"></div>
+      </section>
+
+      <section class="panel detail-panel archive-detail-panel">
+        <div class="section-head">
+          <p class="eyebrow">Inspector</p>
+          <h2>Run Details</h2>
+        </div>
+        <div id="detail-empty" class="detail-empty">Pick a run to inspect its outputs, metrics, and artifacts.</div>
+        <div id="detail-content" class="detail-content hidden">
+          <div class="detail-head">
+            <div>
+              <h3 id="detail-title"></h3>
+              <p id="detail-subtitle"></p>
+            </div>
+            <a id="detail-dashboard-link" class="inline-link hidden" target="_blank" rel="noreferrer">Open HTML artifact</a>
+          </div>
+          <div id="detail-headline" class="headline-grid"></div>
+          <div class="artifact-block">
+            <h4>Artifacts</h4>
+            <div id="artifact-links" class="artifact-links"></div>
+          </div>
+          <div class="detail-grid">
+            <div class="artifact-block">
+              <h4>Summary Snapshot</h4>
+              <pre id="detail-json" class="json-output"></pre>
+            </div>
+            <div class="artifact-block">
+              <div class="preview-head">
+                <h4>Artifact Preview</h4>
+                <span id="preview-label" class="preview-label">Nothing selected</span>
+              </div>
+              <div id="artifact-preview-empty" class="detail-empty compact">Choose an artifact chip to preview it inline.</div>
+              <iframe id="artifact-preview-frame" class="artifact-preview hidden" title="Artifact preview"></iframe>
+              <pre id="artifact-preview-text" class="json-output hidden"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Runtime Lab Mission Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600;9..144,800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body data-page="mission">
+    <div class="grid-shell">
+      <header class="hero panel">
+        <div class="hero-copy">
+          <nav class="top-nav" aria-label="Dashboard">
+            <a class="nav-link is-active" href="/">Mission Control</a>
+            <a class="nav-link" href="/runs.html">Run Archive</a>
+          </nav>
+          <p class="eyebrow">Local Research Rig</p>
+          <h1>Runtime Lab Mission Control</h1>
+          <p class="lede">
+            Launch local model experiments, watch the token-level console, and inspect recent
+            `observe`, `stress`, `control`, and `hysteresis` runs from one place.
+          </p>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric">
+            <span class="metric-label">Repo</span>
+            <strong id="repo-root">Loading…</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Runs Dir</span>
+            <strong id="runs-dir">Loading…</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Status</span>
+            <strong id="hero-status">Idle</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="panel launch-panel">
+        <div class="section-head">
+          <p class="eyebrow">Launch</p>
+          <h2>Run an Experiment</h2>
+        </div>
+        <form id="launch-form">
+          <div class="form-grid">
+            <label>
+              <span>Mode</span>
+              <select id="mode" name="mode">
+                <option value="observe">observe</option>
+                <option value="stress">stress</option>
+                <option value="control">control</option>
+                <option value="hysteresis">hysteresis</option>
+              </select>
+            </label>
+            <label>
+              <span>Registry Preset</span>
+              <select id="registry-preset" name="registry_preset"></select>
+            </label>
+            <label class="wide">
+              <span>Model Registry</span>
+              <input id="registry-path" name="registry_path" type="text" value="models.json" />
+            </label>
+            <label>
+              <span>Model</span>
+              <select id="model" name="model"></select>
+            </label>
+            <label>
+              <span>Custom Model Key</span>
+              <input id="custom-model-key" name="custom_model_key" type="text" placeholder="Optional override" />
+            </label>
+            <label>
+              <span>Backend</span>
+              <select id="backend" name="backend">
+                <option value="hf">hf</option>
+                <option value="nnsight">nnsight</option>
+              </select>
+            </label>
+            <label>
+              <span>Max Tokens</span>
+              <input id="max-tokens" name="max_tokens" type="number" min="1" value="64" />
+            </label>
+            <label>
+              <span>Seed</span>
+              <input id="seed" name="seed" type="number" value="42" />
+            </label>
+            <label>
+              <span>NNsight Device</span>
+              <input id="nnsight-device" name="nnsight_device" type="text" placeholder="Optional" />
+            </label>
+          </div>
+
+          <label class="prompt-field">
+            <span>Prompt</span>
+            <textarea id="prompt" name="prompt" rows="4">Explain how airplanes fly in a clear, accurate way.</textarea>
+          </label>
+
+          <div class="toggle-row">
+            <label class="check">
+              <input id="nnsight-remote" name="nnsight_remote" type="checkbox" />
+              <span>Use NNsight remote execution</span>
+            </label>
+            <label class="check control-only">
+              <input id="shadow" name="shadow" type="checkbox" />
+              <span>Shadow mode (control only)</span>
+            </label>
+          </div>
+
+          <div id="stress-fields" class="mode-fields">
+            <div class="section-head section-head-tight">
+              <p class="eyebrow">Stress Mode</p>
+              <h3>Intervention Window</h3>
+            </div>
+            <div class="form-grid">
+              <label>
+                <span>Layer</span>
+                <input id="layer" name="layer" type="number" value="-1" />
+              </label>
+              <label>
+                <span>Intervention</span>
+                <select id="stress-intervention-type" name="stress_intervention_type">
+                  <option value="additive">additive</option>
+                  <option value="projection">projection</option>
+                  <option value="scaling">scaling</option>
+                </select>
+              </label>
+              <label>
+                <span>Magnitude</span>
+                <input id="magnitude" name="magnitude" type="number" step="0.1" value="2.0" />
+              </label>
+              <label>
+                <span>Start Token</span>
+                <input id="start" name="start" type="number" min="1" value="5" />
+              </label>
+              <label>
+                <span>Duration</span>
+                <input id="duration" name="duration" type="number" min="0" value="10" />
+              </label>
+            </div>
+          </div>
+
+          <div id="control-fields" class="mode-fields hidden">
+            <div class="section-head section-head-tight">
+              <p class="eyebrow">Control Mode</p>
+              <h3>Closed-Loop Settings</h3>
+            </div>
+            <div class="form-grid">
+              <label>
+                <span>Measure Layer</span>
+                <input id="measure-layer" name="measure_layer" type="number" value="-1" />
+              </label>
+              <label>
+                <span>Act Layer</span>
+                <input id="act-layer" name="act_layer" type="number" value="-1" />
+              </label>
+              <label>
+                <span>Intervention</span>
+                <select id="control-intervention-type" name="control_intervention_type">
+                  <option value="scaling">scaling</option>
+                  <option value="sae">sae</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="button-row">
+            <button id="launch-run" class="primary" type="submit">Launch Run</button>
+            <button id="stop-run" class="ghost" type="button">Stop Active Run</button>
+          </div>
+          <div id="form-status" class="form-status hidden"></div>
+        </form>
+      </section>
+
+      <section class="panel console-panel">
+        <div class="section-head">
+          <p class="eyebrow">Live Feed</p>
+          <h2>Run Console</h2>
+        </div>
+        <div class="status-strip">
+          <span id="job-pill" class="pill">Idle</span>
+          <span id="job-command" class="command-line">No active command.</span>
+        </div>
+        <pre id="log-output" class="log-output">Waiting for your first run.</pre>
+      </section>
+
+      <section class="panel runs-panel">
+        <div class="section-head">
+          <p class="eyebrow">History</p>
+          <h2>Recent Runs</h2>
+        </div>
+        <div id="runs-list" class="runs-list"></div>
+      </section>
+    </div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
