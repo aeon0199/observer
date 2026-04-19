@@ -13,6 +13,7 @@ from runtime_lab.config.schemas import ControlConfig, DiagnosticsConfig
 from runtime_lab.core.backend.loader import load_model_with_backend
 from runtime_lab.core.diagnostics.manager import DiagnosticsManager, summarize_diagnostics_health
 from runtime_lab.core.interventions.factory import build_intervention
+from runtime_lab.core.interventions.additive import DynamicAdditiveIntervention, MagnitudeState
 from runtime_lab.core.interventions.scaling import DynamicScalingIntervention, ScaleState
 from runtime_lab.core.io.artifacts import ensure_dir
 from runtime_lab.core.io.hashing import hash_config
@@ -123,15 +124,30 @@ def run_control_experiment(
     )
 
     scale_state = ScaleState(1.0)
+    magnitude_state = MagnitudeState(0.0)
+    itype = str(config.intervention_type).lower().strip()
 
-    if str(config.intervention_type).lower().strip() == "scaling":
+    # Magnitudes used when the controller escalates. Informed by E6/F18:
+    # additive@1.0 produced logit_kl=10.40 at L27 (strong effect). For a
+    # controller we start conservatively smaller.
+    ADDITIVE_WARN_MAG = float(getattr(config, "additive_warn_magnitude", 0.3))
+    ADDITIVE_CRIT_MAG = float(getattr(config, "additive_crit_magnitude", 0.6))
+
+    if itype == "scaling":
         intervention = DynamicScalingIntervention(scale_state)
         intervention_name = intervention.name
-    elif str(config.intervention_type).lower().strip() == "sae":
+    elif itype == "additive":
+        intervention = DynamicAdditiveIntervention(
+            magnitude_state,
+            seed=int(getattr(config, "additive_seed", 42)),
+            relative=True,
+        )
+        intervention_name = intervention.name
+    elif itype == "sae":
         intervention = build_intervention("sae", **(intervention_kwargs or {}))
         intervention_name = getattr(intervention, "name", "sae")
     else:
-        raise ValueError("Control mode currently supports intervention_type in {'scaling', 'sae'}")
+        raise ValueError("Control mode currently supports intervention_type in {'scaling', 'additive', 'sae'}")
 
     engine = RuntimeEngine(
         model=model,
@@ -186,14 +202,29 @@ def run_control_experiment(
         prompt_len = int(prefill.prompt_len)
         past_key_values = prefill.past_key_values
 
+        def _magnitude_for_status(status: str) -> float:
+            """Map controller status → additive magnitude."""
+            s = str(status).upper()
+            if s in ("CRITICAL", "CRIT"):
+                return ADDITIVE_CRIT_MAG
+            if s in ("WARNING", "WARN"):
+                return ADDITIVE_WARN_MAG
+            return 0.0
+
         if prefill.hidden_post is not None:
             diagnostics0 = diagnostics.step(prefill.hidden_post, layer_states={int(config.measure_layer): prefill.hidden_post})
             ctl_state = controller.update(diagnostics0)
-            scale_state.value = float(policy.next_scale(ctl_state))
+            if itype == "additive":
+                magnitude_state.value = _magnitude_for_status(getattr(ctl_state, "status", "OK"))
+            else:
+                scale_state.value = float(policy.next_scale(ctl_state))
         else:
             diagnostics0 = {}
             ctl_state = controller.state
-            scale_state.value = 1.0
+            if itype == "additive":
+                magnitude_state.value = 0.0
+            else:
+                scale_state.value = 1.0
 
         eos = getattr(tokenizer, "eos_token_id", None)
 
@@ -201,8 +232,12 @@ def run_control_experiment(
             for t in range(int(config.max_new_tokens)):
                 consumed_token_id = int(pending_token_id)
 
-                scale_used = float(scale_state.value)
-                intervention_active = bool((scale_used < 1.0) and (not config.shadow))
+                if itype == "additive":
+                    scale_used = float(magnitude_state.value)
+                    intervention_active = bool(abs(scale_used) > 1e-8 and (not config.shadow))
+                else:
+                    scale_used = float(scale_state.value)
+                    intervention_active = bool((scale_used < 1.0) and (not config.shadow))
 
                 step = engine.step(
                     t=t,
@@ -216,8 +251,12 @@ def run_control_experiment(
 
                 raw_div = float(step.diagnostics.get("divergence", 0.0))
                 ctl_state = controller.update(step.diagnostics)
-                next_scale = float(policy.next_scale(ctl_state))
-                scale_state.value = float(next_scale)
+                if itype == "additive":
+                    next_scale = _magnitude_for_status(getattr(ctl_state, "status", "OK"))
+                    magnitude_state.value = float(next_scale)
+                else:
+                    next_scale = float(policy.next_scale(ctl_state))
+                    scale_state.value = float(next_scale)
 
                 div_color = Color.GREEN
                 if ctl_state.avg_score > controller.TH_WARN:

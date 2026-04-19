@@ -34,10 +34,10 @@ Last updated: **2026-04-18** · Active agent: Claude Opus 4.7 (1M context)
 
 ## 1. Current state
 
-- **Active focus**: F13 gave us a reproducible drift operating point; E6 then established that **scaling interventions at L27 do literally nothing** (F17) — which explains F4's null controller result. **Additive is the controller's real knob.** Now the question is whether additive interventions triggered at the right time can reduce divergence.
-- **Controller status**: **unblocked for redesign (E8)**. Concrete spec: act_layer=-1 + intervention_type=additive + calibrated magnitude ≈ 0.5 (smaller than E6's 1.0 to avoid over-correction). Current CLI `control` mode only supports `scaling` and `sae` — E8 needs code work: wire `additive` into the control runner's intervention factory selection and add direction-inversion logic (subtract a fraction of measured drift direction instead of applying a random seeded direction).
+- **Active focus**: E8 MVP complete. Random-direction additive controller is net-zero (F21). Wiring works, actuator works, direction is the bottleneck. **Next: E8.5 with EMA-baseline drift opposition.**
+- **Controller status**: **partial win** — additive controller wired and verified. But random direction is net-zero. Direction must oppose measured drift to reduce divergence. E8.5 will implement that.
 - **Capabilities snapshot**: observe, stress, hysteresis (prompt + noise modes), control (shadow + active, currently scaling/sae only), seed sweeps, multi-layer probing, logit-KL, semantic layer defaults, advisory generator, spectral trajectory probe, warm-model daemon (~16× speedup). All verified 2026-04-19.
-- **Next recommended action**: **E8 — controller redesign.** This is now a code task: (1) allow `control --type additive` to build an AdditiveIntervention with configured magnitude, (2) optionally add drift-direction inversion so the injected delta opposes the detected divergence, (3) re-run shadow vs active A/B with the new setup on the same sourdough prompt that exposed F4. Success criterion: active mode's avg_raw_div lower than shadow mode's by more than 1 stdev.
+- **Next recommended action**: **E8.5 — drift-opposing controller.** Add EMA hidden-state tracker in control loop; on controller fire, compute `drift = h - h_ema`, inject `-β · drift/||drift|| · ||h||`. Re-run A/B suite. If active < shadow by >1 stdev on the same sourdough prompt, closed-loop control is empirically established.
 
 ---
 
@@ -59,6 +59,9 @@ _What we've established, with evidence. Don't re-run these unless you suspect on
 - **F17** — **(E6, 10 runs) Scaling intervention at L27 has ZERO effect.** `scaling@0.5` and `scaling@2.0` both produced `logit_kl_mean_during=0.0000` exactly AND `token_match_rate=1.000` across all 5 seeds each. The scaling factor is erased by the final RMSNorm before the LM head. **This is almost certainly why the controller (F4) didn't work** — its default `intervention_type=scaling` at `act_layer=-1` was a no-op. Confidence: **very high**.
 - **F18** — **(E6) Additive is the right intervention class at L27.** Additive@1.0: `logit_kl_mean_during=10.40 ± 2.78`, DSR=3.73 (reproducible), token_match=0.145 (85% of tokens flipped). Mixed regimes PLASTIC/PARTIAL/DIVERGENT, showing genuine sensitivity without pure runaway. Confidence: **high**.
 - **F19** — **(E6) Projection@64 is large but always destructive.** logit_kl=7.78 ± 4.05, DSR=1.92, token_match=0.20, regimes = all DIVERGENT. Keeping only 64/2048 dims wrecks the hidden state too aggressively — not a controllable intervention. Confidence: **high**.
+- **F21** — **(E8 MVP) Random-direction additive controller has net-zero effect on avg_div.** A/B over 5 seeds on the F4 sourdough prompt: SHADOW avg_div=0.6732±0.174, ACTIVE_ADDITIVE avg_div=0.6728±0.176 (Δ=+0.0004). Per-seed: seed 2 IMPROVED (0.776→0.755, warnings 10→8); seeds 0 and 4 WORSENED; seed 3 controller never fired. The random-direction intervention helps when the seeded direction opposes drift and hurts when it aligns — they cancel in aggregate. **This confirms: the wiring is right, the actuator is correct (E6/F18), but direction is the missing piece.** Confidence: **high**.
+- **F22** — **(E8 MVP re-confirmation of F17)** Active scaling vs shadow on the same prompt set: Δ=+0.0004 at 4 decimal precision. Scaling at L27 is definitively a no-op in a closed loop, matching F17's finding from stress mode. The closed loop with scaling is effectively always in shadow mode regardless of the flag. Confidence: **very high**.
+
 - **F20** — **(E6 synthesis) Controller redesign path is now clear.** For Qwen3-1.7B at L27: use `intervention_type=additive` (not scaling), calibrate magnitude against the F13 drift envelope (1.96 ± 0.37), correct by injecting additive delta in the direction that *reduces* measured divergence. Current `control` CLI default is `scaling` which F17 proves is useless at -1. Either add an `additive` mode to control, or move `measure_layer` and `act_layer` to different points so scaling has a chance to act pre-norm.
 
 - **F16** — **(E2 phase C) Per-seed "stable basins" exist.** Factual seed=2 produced identical drift=2.429 and recovery=+0.261 at BOTH mag=0.5 AND mag=0.7 — the 40% magnitude increase wasn't enough to escape that seed's token-choice basin. Only at mag=1.0 did seed=2 shift to drift=2.469, recovery=+0.726. Factual seed=3 was no-propagation at mag=0.5 and 0.7, then drift=1.835 at 1.0 — a per-seed propagation threshold between 0.7 and 1.0. Confidence: **medium** (n=1 observation each).
@@ -205,12 +208,21 @@ Ordered by data-value _right now_. Tackle top-down unless the human overrides.
 - **Fix**: JobManager tracks one daemon per (model, backend). On launch, if running daemon matches payload.model, send to its stdin; else respawn. Tail daemon stderr as log events. Write ack to SSE.
 - **Effort**: ~half-day.
 
-### [ ] E8 — Controller redesign (blocked)
-- **Status**: blocked on E1, E2, E6
-- **Question**: Can we build a controller that actually helps, given what we learn from E1 (where) and E6 (what)?
-- **Hypothesis H2**: controller that intervenes at the peak-sensitivity layer (from E1) with the intervention type that moves logits most per unit magnitude (from E6) will measurably reduce avg divergence AND improve token-level outcomes.
-- **Design**: re-run the shadow/active A/B but at the E1-identified layer and with the E6-identified intervention, with thresholds calibrated from E3's baseline.
-- **Success criterion**: active mode's avg_raw_div is at least 10% lower than shadow mode's, with no degradation in output coherence.
+### [~] E8 — Controller redesign (MVP complete, needs E8.5)
+- **Status**: MVP complete 2026-04-19. See F21/F22.
+- **MVP outcome**: additive intervention wired into control CLI + runner. A/B on sourdough prompt showed random-direction additive is net-zero vs shadow (Δ=+0.0004). Per-seed variance confirms the actuator works (seed 2 improved 2%, seeds 0/4 got worse). Random direction is the bottleneck.
+- **Next — E8.5**: replace random direction with drift-opposing direction via EMA baseline.
+
+### [ ] E8.5 — Drift-opposing additive controller (the real test)
+- **Status**: pending (code + experiment)
+- **Question**: does additive intervention pointed in the opposite direction of measured drift actually reduce avg_div?
+- **Design**:
+  - Add an EMA tracker to the control loop: `h_ema[t] = α · h_ema[t-1] + (1-α) · h_current[t]` with α≈0.9, warmed up over the first 3-5 tokens with `intervention_active=False`.
+  - When controller fires (WARN or CRIT), compute `drift = h_current - h_ema`, and inject delta = `-β · (drift / ||drift||) · ||h_current||` (unit opposition × relative magnitude).
+  - Re-run the E8 MVP A/B suite with this new controller.
+- **Success criterion** (same as E8): ACTIVE avg_div < SHADOW avg_div by more than 1 shadow-stdev.
+- **Fallback criterion**: even if aggregate doesn't cross stdev, per-seed wins should be NOT cancelled by per-seed losses (i.e., MOST seeds should improve, not just one).
+- **Effort**: ~60 lines of new code in `adaptive_runner.py`, 10 lines in the additive intervention for signed-direction support, maybe a new `DriftOpposingAdditiveIntervention` class.
 
 ---
 
@@ -225,6 +237,7 @@ _One-line per session. Link to detailed journals in `research/session_*.md` when
 - **2026-04-18 (TD2 + E2B session)** · Applied TD2: recovery returns `None` when drift<0.05, with `perturbation_did_not_propagate` flag; advisory reads the flag and suggests concrete next params. Added H6 (late-layer is better control surface) from GPT synthesis. Ran E2 phase B at L27 mag=0.5 × 5 seeds × 2 prompts. **H6 partially rejected** (F11): factual DSR improved 0.89→1.26, procedural DSR WORSENED 1.40→0.91. Neither crossed DSR>2 signal-dominated threshold. BUT recovery numbers are now interpretable post-TD2 (F12). Procedural recovery shifted positive at L27. Next step: E2 phase C — magnitude sweep to see if any magnitude escapes the seed-dominated regime.
 - **2026-04-18 (E2C — breakthrough session)** · Ran E2 phase C, 30 runs, magnitude sweep at L27 with {0.5, 0.7, 1.0}. **BREAKTHROUGH**: at (L27, mag=1.0, factual) DSR=5.36 (first reproducible signal in the repo). Added F13 (signal-dominated regime achieved), F14 (prompt-dependent magnitude threshold), F15 (recovery-vs-magnitude trend is prompt-specific), F16 (per-seed stable basins). **Controller work is now unblocked.** Updated §1 next-recommended-action: E6 (intervention-type comparison at L27+mag=1.0) → E8 (controller redesign).
 - **2026-04-19 (E6 — controller root-cause)** · Ran E6, 20 stress runs at L27 factual comparing additive/scaling/projection. **F17: scaling at L27 has ZERO effect** (logit_kl=0.0000 exactly, both at scale=0.5 and scale=2.0) because the final RMSNorm absorbs the scale factor. This EXPLAINS F4 — the controller was doing nothing. F18: additive@1.0 is the winner (kl=10.40, DSR=3.73, 85% tokens flipped). F19: projection@64 is too destructive. F20: controller redesign path is now concrete — use additive, not scaling. Next: E8 (actually code up the additive-based controller).
+- **2026-04-19 (E8 MVP — partial win)** · Coded additive controller: new `DynamicAdditiveIntervention` + `MagnitudeState` classes, wired into `adaptive_runner.py`, added `--type additive` + `--additive-{warn,crit}-magnitude` CLI args, daemon updated. A/B on sourdough (5 seeds × 3 cells): **F21: random-direction additive has net-zero effect** (Δ=+0.0004 vs shadow). Per-seed: some improve, some worsen, averages cancel. Actuator confirmed (seed 2: warnings 10→8, div 0.776→0.755). **Direction is the missing piece.** F22: scaling-in-closed-loop also confirmed zero-effect. Next: E8.5 drift-opposing controller via EMA baseline.
 
 ---
 

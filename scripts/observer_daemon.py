@@ -119,7 +119,7 @@ def _build_config_hysteresis(cfg: Dict[str, Any]):
 
 def _build_config_control(cfg: Dict[str, Any]):
     from runtime_lab.config.schemas import ControlConfig
-    return ControlConfig(
+    out = ControlConfig(
         prompt=cfg["prompt"],
         model_key=cfg.get("model"),
         max_new_tokens=int(cfg.get("max_tokens", 64)),
@@ -133,6 +133,11 @@ def _build_config_control(cfg: Dict[str, Any]):
         top_p=float(cfg.get("top_p", 1.0)),
         top_k=int(cfg.get("top_k", 0)),
     )
+    # Controller knobs (E8 — additive mode)
+    out.additive_warn_magnitude = float(cfg.get("additive_warn_magnitude", 0.3))
+    out.additive_crit_magnitude = float(cfg.get("additive_crit_magnitude", 0.6))
+    out.additive_seed = int(cfg.get("additive_seed", 42))
+    return out
 
 
 def _run_request(request: Dict[str, Any], backend) -> Dict[str, Any]:

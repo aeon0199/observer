@@ -26,7 +26,17 @@ def add_control_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--nnsight-device", default=None)
     parser.add_argument("--registry-path", default="models.json")
     parser.add_argument("--runs-dir", default=None)
-    parser.add_argument("--type", default="scaling", choices=["scaling", "sae"])
+    parser.add_argument("--type", default="scaling", choices=["scaling", "sae", "additive"])
+    # Additive-controller tunables (E8/F18-F20). Magnitudes used when the
+    # controller escalates. Conservative defaults — E6 showed mag=1.0
+    # produced strong effect (logit_kl=10.40), so controller should start
+    # well below that.
+    parser.add_argument("--additive-warn-magnitude", type=float, default=0.3,
+                        help="Additive intervention magnitude when controller is WARNING")
+    parser.add_argument("--additive-crit-magnitude", type=float, default=0.6,
+                        help="Additive intervention magnitude when controller is CRITICAL")
+    parser.add_argument("--additive-seed", type=int, default=42,
+                        help="Random direction seed for additive intervention")
     parser.add_argument("--shadow", action="store_true")
     parser.add_argument("--ma-window", type=int, default=3)
     parser.add_argument("--threshold-warn", type=float, default=0.55)
@@ -71,6 +81,11 @@ def _run_one(args, seed: int):
         top_p=float(getattr(args, "top_p", 1.0)),
         top_k=int(getattr(args, "top_k", 0)),
     )
+    # Attach additive-controller knobs as attrs (ControlConfig is a
+    # dataclass that doesn't declare them; adaptive_runner reads via getattr).
+    cfg.additive_warn_magnitude = float(getattr(args, "additive_warn_magnitude", 0.3))
+    cfg.additive_crit_magnitude = float(getattr(args, "additive_crit_magnitude", 0.6))
+    cfg.additive_seed = int(getattr(args, "additive_seed", 42))
 
     probe_layers = resolve_probe_layers(args.probe_layers, None)
     if int(args.measure_layer) not in probe_layers:
