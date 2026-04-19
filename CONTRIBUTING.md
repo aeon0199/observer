@@ -24,6 +24,18 @@ pip install -r requirements-optional.txt
 3. Do not merge claims without multi-seed results.
 4. Keep CLI behavior backward compatible unless discussed first.
 
+## Research Workflow
+
+For experiment-driven work, use the repo workflow note:
+
+- [docs/RESEARCH_WORKFLOW.md](docs/RESEARCH_WORKFLOW.md)
+
+It covers:
+- how to orient from `RESEARCH.md`
+- how to define success criteria before runs
+- how to verify provenance before interpretation
+- how to update the research log after each session
+
 ## Quick Checks
 
 ```bash
