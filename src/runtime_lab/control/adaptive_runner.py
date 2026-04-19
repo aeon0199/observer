@@ -49,7 +49,8 @@ def run_control_experiment(
     diagnostics_config: Optional[DiagnosticsConfig] = None,
     intervention_kwargs: Optional[Dict[str, Any]] = None,
     generate_dashboard_html: bool = True,
-) -> Tuple[str, Dict[str, Any]]:
+    prebuilt_backend: Optional[Any] = None,
+) -> Dict[str, Any]:
     _set_seed(config.seed)
 
     if int(config.measure_layer) != int(config.act_layer):
@@ -58,13 +59,16 @@ def run_control_experiment(
             "Separate measurement and actuation hooks are not implemented yet."
         )
 
-    backend_result = load_model_with_backend(
-        model_key=config.model_key,
-        registry_path=registry_path,
-        backend=config.backend,
-        nnsight_remote=config.nnsight_remote,
-        nnsight_device=config.nnsight_device,
-    )
+    if prebuilt_backend is not None:
+        backend_result = prebuilt_backend
+    else:
+        backend_result = load_model_with_backend(
+            model_key=config.model_key,
+            registry_path=registry_path,
+            backend=config.backend,
+            nnsight_remote=config.nnsight_remote,
+            nnsight_device=config.nnsight_device,
+        )
 
     tokenizer = backend_result.tokenizer
     model = backend_result.model

@@ -440,16 +440,20 @@ def run_hysteresis_experiment(
     config: HysteresisConfig,
     registry_path: str = "models.json",
     runs_dir: Optional[str] = None,
+    prebuilt_backend: Optional[Any] = None,
 ) -> Dict[str, Any]:
     _set_deterministic_state(config.seed)
 
-    backend_result = load_model_with_backend(
-        model_key=config.model_key,
-        registry_path=registry_path,
-        backend=config.backend,
-        nnsight_remote=config.nnsight_remote,
-        nnsight_device=config.nnsight_device,
-    )
+    if prebuilt_backend is not None:
+        backend_result = prebuilt_backend
+    else:
+        backend_result = load_model_with_backend(
+            model_key=config.model_key,
+            registry_path=registry_path,
+            backend=config.backend,
+            nnsight_remote=config.nnsight_remote,
+            nnsight_device=config.nnsight_device,
+        )
     tokenizer = backend_result.tokenizer
     model = backend_result.model
     device = backend_result.device

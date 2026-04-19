@@ -186,17 +186,21 @@ def run_stress_experiment(
     runs_dir: Optional[str] = None,
     diagnostics_config: Optional[DiagnosticsConfig] = None,
     intervention_kwargs: Optional[Dict[str, Any]] = None,
+    prebuilt_backend: Optional[Any] = None,
 ) -> Dict[str, Any]:
     if config.seed is not None:
         _set_deterministic_state(int(config.seed))
 
-    backend_result = load_model_with_backend(
-        model_key=config.model_key,
-        registry_path=registry_path,
-        backend=config.backend,
-        nnsight_remote=config.nnsight_remote,
-        nnsight_device=config.nnsight_device,
-    )
+    if prebuilt_backend is not None:
+        backend_result = prebuilt_backend
+    else:
+        backend_result = load_model_with_backend(
+            model_key=config.model_key,
+            registry_path=registry_path,
+            backend=config.backend,
+            nnsight_remote=config.nnsight_remote,
+            nnsight_device=config.nnsight_device,
+        )
     tokenizer = backend_result.tokenizer
     model = backend_result.model
     device = backend_result.device

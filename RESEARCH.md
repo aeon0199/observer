@@ -34,10 +34,10 @@ Last updated: **2026-04-18** · Active agent: Claude Opus 4.7 (1M context)
 
 ## 1. Current state
 
-- **Active focus**: characterize the signal before fixing the controller. The controller-A/B (shadow vs active) showed no measurable benefit — that's §2 finding F4. Before we rebuild the controller we need the data from experiments E1–E4 to know *where* and *what* to control.
-- **Controller status**: **ON HOLD** — see F4.
+- **Active focus**: characterize the signal before fixing the controller. E1 is complete — peak sensitivity is at L27 (final layer), contradicting F2 at this magnitude. See F8.
+- **Controller status**: **ON HOLD** — see F4. But now we have a candidate intervention point (L27 or L14) for E8 when we come back to it.
 - **Capabilities snapshot**: observe, stress, hysteresis (prompt + noise modes), control (shadow + active), seed sweeps, multi-layer probing, logit-KL, semantic layer defaults, advisory generator, spectral trajectory probe. All verified 2026-04-18.
-- **Next recommended action**: kick off **E1** (layer-sensitivity map). ~10 min. Single most informative experiment we have right now.
+- **Next recommended action**: fix **TD2** (recovery-metric numerical instability) before any more hysteresis experiments — otherwise every future aggregate is polluted. It's ~30 lines. Then consider: **E2 phase B at L27 with mag=0.5** (higher magnitude + most-sensitive layer from E1 might overcome the seed variance F10 identified). Alternate path: **E3** (length-controlled baselines) so any future hysteresis result has a noise floor to compare against.
 
 ---
 
@@ -47,11 +47,15 @@ _What we've established, with evidence. Don't re-run these unless you suspect on
 
 - **F1** — **The legacy spectral module was measuring neuron-axis noise, not trajectory structure.** Fixed 2026-04-18. The new `SpectralTrajectoryProbe` FFTs over the token-time axis and emits a `permutation_change` self-test ratio per step; verified non-zero (0.029 on a drifting synthetic signal, and real values across observe runs). Confidence: **high**.
 - **F2** — **Final-layer perturbations (layer -1) are consistently absorbed by greedy argmax and fail to cascade.** Multiple runs showed `token_match_rate=1.0` and `drift=0` at layer -1 with relative magnitudes up to 0.4. Same perturbation at mid-stack (layer -14 of 28) produced measurable drift=1.85. Confidence: **high**. Implication: any "nothing happened" result at layer -1 is uninformative; retest at mid-stack.
-- **F3** — **Hidden-state hysteresis signal is real and non-trivial.** Noise-mode hysteresis with mid-stack injection on Qwen3-1.7B (magnitude 0.3, duration 8 tokens, 1 seed) produced drift=1.854, residual=0.970, recovery=0.476 — "partial" regime. This is the first time the framework's core claim ("internal state doesn't fully recover after perturbation") has been measurably demonstrated in this repo. Single-seed — needs E2 to confirm. Confidence: **low/suggestive** (n=1).
+- **F3** — ~~**Hidden-state hysteresis signal is real and non-trivial.**~~ **REVISED BY E2** ❌ The single-seed "recovery=0.476 partial" result did **not** replicate. E2 phase A (5 seeds × 2 prompts at L14/mag=0.3/temp=0.8) produced 8/10 "runaway" regimes, 1 "plastic", 1 "partial" (plus one seed with drift=0.002 giving recovery=-913 — metric blowup). Factual prompt recovery stdev=408 on n=5. The original F3 run was a seed-dependent fluke at these parameters. Confidence on the revised finding: **high** (n=10). Implication: the framework's "partial recovery" claim needs much more careful experimental work before being publishable.
 - **F4** — **The closed-loop controller does NOT measurably stabilize trajectories.** Shadow vs active A/B on identical prompt+seed+sampling: shadow avg_raw_div=0.765 with 8 warnings + 1 critical; active avg_raw_div=**0.768** with 7 warnings + 1 critical. The controller triggers, applies scaling, but divergence is slightly *higher* in active mode. Confidence: **medium** (1 prompt, 1 seed — needs replication, but the direction is clear). Implication: the scaling intervention at current thresholds doesn't help. Investigate layer choice, scaling factors, and whether scaling is the right intervention type at all.
 - **F5** — **Greedy decoding + identical seed produces identical tokens even when logits shift.** Observed logit_kl_mean_during=0.014 while token_match_rate=1.0 on a stress run. The `torch.multinomial` RNG is deterministic given the seed, so small logit shifts don't flip draws. Implication: sampling alone doesn't split trajectories; we need different branch seeds OR much larger temperature to get diverging token streams from small perturbations. Confidence: **high** (reproducible).
 - **F6** — **Sampling with seed-sweep produces meaningful per-seed variance.** Observe sweep with seeds 0–2 and temperature=0.8 gave avg_divergence stdev=0.23 (range 0.32–0.75). With greedy it was stdev=0. Confirms sampling unlocks seed-variance analysis. Confidence: **high**.
 - **F7** — **(2026-04-18 late) Integration-quality gap.** Independent audit (Codex) found three startup-time crashes we'd missed: control sweep broken (tuple vs dict return), stress sweep broken (`int("mid")` in describe), advisory misreading `WARN` vs `WARNING`. All three fixed and smoke-validated; repo still has no automated test layer that would have caught them. **Technical-debt item**: add a pytest smoke suite that exercises every CLI sweep path with a 2-seed fake model. Until then, treat any seeded sweep run as needing end-to-end verification after code changes.
+- **F9** — **(E2 phase A) Hysteresis `recovery` metric is numerically unstable when `drift` is near zero.** Formula is `1 - hysteresis / (drift + 1e-8)`; when noise injection happens to produce `drift ≈ 0.002` (seed-dependent), recovery can explode to ±1000 even for modest `hysteresis`. Observed seed=3 factual: drift=0.002, hysteresis=2.027, recovery=-913. **Fix needed (TD2)**: if `drift < min_threshold` (e.g., 0.05), mark recovery as `None` / "perturbation-did-not-propagate" instead of computing a blown-up ratio. Confidence: **high**. Until fixed, treat negative-recovery values with skepticism — they may just be low-drift artifacts.
+- **F10** — **(E2 phase A) At (L14, mag=0.3, temp=0.8), noise perturbation propagation is seed-dominated.** Drift varied 0.002 to 3.45 across 5 seeds on the same prompt. The perturbation either "catches" a decision-critical token or misses entirely, with no middle ground. This is why F3 was a single-seed fluke. **Implication**: noise-mode experiments need to either (a) perturb at a wider window (more duration), (b) perturb at a more sensitive layer (E1 peak was L27, not L14), or (c) raise magnitude substantially to overwhelm seed variance.
+
+- **F8** — **(E1 outcome) Layer-sensitivity is monotonic-increasing toward the output at magnitude=0.3 + sampling.** Qwen3-1.7B, stress additive, 28 layers, sweep [2,7,14,21,27] × 2 prompts × 3 seeds. Per-layer `logit_kl_mean_during` (averaged across prompts): L2=2.39, L7=2.44, L14=3.77, L21=3.47, **L27=6.41**. Token-match (lower = more flipping): L2=0.58, L7=0.68, L14=0.45, L21=0.56, **L27=0.27**. **L27 is the peak-sensitivity layer on both logit and token metrics.** Confidence: **medium** — tight stdevs on factual prompt (0.011 ± 0.004 at L2) but huge stdevs on procedural prompt (4.78 ± 8.27 at L2), suggesting prompt type strongly modulates reproducibility. This partially **revises F2**: final-layer perturbations are absorbed at small magnitudes + greedy decoding, but dominate at moderate magnitudes + sampling. **Implication for controller**: L27 is a viable intervention point; L14 is second-best. Recovery at L27 is near-zero (partial) which is the "controllable regime" we want.
 
 ---
 
@@ -73,25 +77,19 @@ _Status values: `pending` / `in-progress (session YYYYMMDD)` / `complete (YYYYMM
 
 Ordered by data-value _right now_. Tackle top-down unless the human overrides.
 
-### [ ] E1 — Layer-sensitivity map
-- **Status**: pending
-- **Question**: Which layers' perturbations move the model's decision distribution the most?
-- **Why it's highest value**: directly informs where the controller should intervene (F2 already told us not -1). Also a publishable interpretability result if the curve has structure.
-- **Design**: `stress additive`, magnitude=0.3 (relative), start=3, duration=8, max_tokens=48, temperature=0.8.
-  - **Layers**: `[2, 7, 14, 21, 27]` (early, 25%, 50%, 75%, late) for Qwen3-1.7B (28 layers).
-  - **Prompts**: 2 — one factual ("What is the tallest mountain on Earth?"), one procedural ("Write step-by-step instructions for baking sourdough bread.").
-  - **Seeds**: 3 each (`0-2`).
-  - Total: 5 layers × 2 prompts × 3 seeds = **30 runs**.
-- **Primary metric**: `logit_kl_mean_during` per layer, averaged across seeds+prompts. Plot logit_kl vs layer.
-- **Secondary**: `token_match_rate`, `regime`, `recovery_ratio`.
-- **Expected runtime**: ~10–15 min.
-- **Expected payoff**: a layer-sensitivity curve. Peak location is where the controller should intervene; shape tells us if sensitivity is broad or sharp.
-- **Runs**: _(filled as launched)_
-- **Outcome**: _(filled when complete)_
-- **Follow-ups**: _(spawn child experiments here)_
+### [x] E1 — Layer-sensitivity map *(complete 2026-04-18)*
+- **Status**: complete
+- **Runs**: 10 sweeps (`sweep_stress_*`), 30 total runs. Prompt × layer × 3 seeds. All successful (n_ok=3 each).
+- **Outcome**: **Sensitivity rises monotonically toward the output.** L2=2.39 → L7=2.44 → L14=3.77 → L21=3.47 → L27=6.41 (logit_kl mean). **Peak at L27** — contradicts earlier F2 hunch that final-layer perturbations are absorbed; see F8 for the revised claim. Factual prompt produced tight stdevs (~3% of mean); procedural prompt produced huge stdevs (often >100% of mean), suggesting prompt type modulates reproducibility. Token-match rate at L27 was 0.27 (meaning 73% of tokens flipped) — plenty of signal for the controller to work with.
+- **Follow-ups**:
+  - **E1.5** (new, high priority): wider layer sampling — does the curve keep climbing monotonically, or is there a peak before L27? Test L24, L25, L26, L27 to pin the shape at the tail.
+  - **E1.6** (new, medium priority): magnitude sweep at L27 — at what magnitude does recovery collapse? Currently `recovery` is -0.23 at L27 procedural (near zero = controllable). Map this.
+  - Blocks: **E6** (intervention-type) can now run at L27. **E8** (controller redesign) should test L14 AND L27 as candidate intervention points.
 
-### [ ] E2 — Hysteresis noise sweep (the headline experiment)
-- **Status**: pending
+### [~] E2 — Hysteresis noise sweep (the headline experiment) · PHASE A COMPLETE 2026-04-18
+- **Status**: phase A complete (negative/revising result). Phase B pending TD2 fix.
+- **Phase A outcome**: 10 runs (5 seeds × 2 prompts) at L14/mag=0.3/temp=0.8. **F3 did not replicate** — 8/10 runaway, 1 plastic, 1 partial. See F9, F10. Recovery metric is unstable (F9), and the perturbation effect is seed-dominated at these params (F10).
+- **Phase B plan** (once TD2 fixed): re-run at L27 (E1's peak) with mag=0.5 and 5 seeds. Hypothesis: a more-sensitive layer + larger magnitude will swamp seed noise and produce reproducible drift/recovery.
 - **Question**: Is partial-recovery hysteresis a consistent phenomenon, or was F3 a single-seed fluke?
 - **Why it's high value**: this is the framework's *core research claim*. F3 showed it works on one seed; we need to prove it replicates.
 - **Design**: `hysteresis perturbation_mode=noise`, temperature=0.8, max_tokens=64.
@@ -163,6 +161,22 @@ Ordered by data-value _right now_. Tackle top-down unless the human overrides.
 - **Why it's lower value**: diagnostic / sanity-check, not generative.
 - **Design**: `observe`, same prompt, 4 temps × 5 seeds = 20 runs.
 
+### [x] TD1 — Warm-model daemon *(complete 2026-04-18)*
+- **Status**: complete
+- **Outcome**: `scripts/observer_daemon.py` built. Loads model once, reads JSON-lines from stdin, dispatches to any runner (observe/stress/hysteresis/control) via new `prebuilt_backend` kwarg. Measured speedup: **~16× on reused requests** (observe: 30s cold → 1.8s warm after first run). E2 phase A ran in 3.4 min (would have been ~15 min cold). Dashboard JobManager does NOT yet use the daemon — it still spawns subprocesses — but batch orchestrators (`/tmp/run_e2_phase_a.py` style) talk to it directly. Dashboard integration is the follow-up (TD3).
+
+### [ ] TD2 — Fix recovery-metric numerical instability (F9)
+- **Status**: pending
+- **Why**: `recovery = 1 - hysteresis / (drift + 1e-8)` blows up when drift ≈ 0. In E2 phase A, seed=3 factual gave drift=0.002, recovery=-913. This pollutes all aggregate stats.
+- **Fix**: in `hysteresis/runner.py`, when `drift_composite < 0.05` (tunable) emit `recovery=None` and a new flag `perturbation_did_not_propagate=True`. Advisory should read the flag and suggest a larger magnitude / different layer instead of reporting a recovery number.
+- **Effort**: ~30 lines.
+
+### [ ] TD3 — Dashboard daemon integration
+- **Status**: pending
+- **Why**: Dashboard JobManager still spawns fresh subprocesses. Batch orchestrators use the daemon directly.
+- **Fix**: JobManager tracks one daemon per (model, backend). On launch, if running daemon matches payload.model, send to its stdin; else respawn. Tail daemon stderr as log events. Write ack to SSE.
+- **Effort**: ~half-day.
+
 ### [ ] E8 — Controller redesign (blocked)
 - **Status**: blocked on E1, E2, E6
 - **Question**: Can we build a controller that actually helps, given what we learn from E1 (where) and E6 (what)?
@@ -176,7 +190,10 @@ Ordered by data-value _right now_. Tackle top-down unless the human overrides.
 
 _One-line per session. Link to detailed journals in `research/session_*.md` when we start writing them._
 
-- **2026-04-18** · Foundation session (this one). Built advisory system, fixed spectral, added sampling + logit-KL, semantic layer defaults, noise-mode hysteresis, dashboard advisory display, capabilities endpoint, 5 recipes, seed-sweeps. Established F1–F6. Controller confirmed broken (F4). This research doc seeded. Next: E1.
+- **2026-04-18** · Foundation session. Built advisory system, fixed spectral, added sampling + logit-KL, semantic layer defaults, noise-mode hysteresis, dashboard advisory display, capabilities endpoint, 5 recipes, seed-sweeps. Established F1–F6. Controller confirmed broken (F4). This research doc seeded.
+- **2026-04-18 (late)** · Bug-fix pass after Codex audit. F7: three integration crashes fixed (control sweep tuple, stress sweep `int("mid")`, advisory `WARN` vs `WARNING`). Tech-debt flag: no smoke-test suite.
+- **2026-04-18 (E1 session)** · Ran E1 (layer-sensitivity, 30 runs). **F8: peak sensitivity at L27 (final layer)**, monotonic increase from L2. Revised F2 — final-layer perturbations dominate at moderate magnitude + sampling, not absorbed. Next: E2 phase A (hysteresis replication) OR E1.5 (tail refinement).
+- **2026-04-18 (daemon + E2A session)** · Built warm-model daemon (TD1 complete). Ran E2 phase A — 10 hysteresis runs at L14 mag=0.3. **F3 did not replicate** — only 1–2 of 10 runs showed partial-recovery; the rest were runaway, some with numerically-pathological recovery (F9). Added F9 (recovery metric instability) and F10 (seed-dominated perturbation at these params). Queued TD2 (recovery-metric fix) and TD3 (dashboard daemon integration). Daemon measured 16× speedup on reused requests.
 
 ---
 
