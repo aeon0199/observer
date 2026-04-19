@@ -59,12 +59,6 @@ def run_control_experiment(
 ) -> Dict[str, Any]:
     _set_seed(config.seed)
 
-    if int(config.measure_layer) != int(config.act_layer):
-        raise ValueError(
-            "Control mode currently requires measure_layer == act_layer. "
-            "Separate measurement and actuation hooks are not implemented yet."
-        )
-
     if prebuilt_backend is not None:
         backend_result = prebuilt_backend
     else:
@@ -172,6 +166,7 @@ def run_control_experiment(
         tokenizer=tokenizer,
         device=device,
         layer_idx=int(config.act_layer),
+        measure_layer_idx=int(config.measure_layer),
         diagnostics_manager=diagnostics,
         intervention=intervention,
         probe_layers=diag_cfg.probe_layers,
@@ -301,8 +296,12 @@ def run_control_experiment(
 
             return drift_norm, reference_norm
 
-        if prefill.hidden_post is not None:
-            diagnostics0 = diagnostics.step(prefill.hidden_post, layer_states={int(config.measure_layer): prefill.hidden_post})
+        prefill_measure_hidden = prefill.measure_hidden if prefill.measure_hidden is not None else prefill.hidden_post
+        if prefill_measure_hidden is not None:
+            diagnostics0 = diagnostics.step(
+                prefill_measure_hidden,
+                layer_states={int(config.measure_layer): prefill_measure_hidden},
+            )
             ctl_state = controller.update(diagnostics0)
             if itype == "additive":
                 if additive_direction == "opposing":
@@ -311,7 +310,7 @@ def run_control_experiment(
                         anchor_hidden = None
                         anchor_steps = 0
                     else:
-                        ema_hidden = _hidden_vec(prefill.hidden_post)
+                        ema_hidden = _hidden_vec(prefill_measure_hidden)
                         ema_steps = 0
                     direction_state.direction = None
                     magnitude_state.value = 0.0
@@ -361,7 +360,9 @@ def run_control_experiment(
                     reference_norm = float(ema_hidden.norm().item()) if ema_hidden is not None else 0.0
                 if itype == "additive":
                     if additive_direction == "opposing":
-                        observed_hidden = step.hidden_pre if step.hidden_pre is not None else step.hidden_post
+                        observed_hidden = step.measure_hidden
+                        if observed_hidden is None:
+                            observed_hidden = step.hidden_pre if step.hidden_pre is not None else step.hidden_post
                         drift_norm, reference_norm = _set_opposing_state(
                             observed_hidden,
                             str(getattr(ctl_state, "status", "OK")),
@@ -418,6 +419,8 @@ def run_control_experiment(
                     "token_id": ctrl_evt.consumed_token_id,
                     "token_text": ctrl_evt.consumed_token_text,
                     "predicted_next_token_id": ctrl_evt.predicted_next_token_id,
+                    "measure_resolved_layer_idx": ctrl_evt.measure_resolved_layer_idx,
+                    "act_resolved_layer_idx": ctrl_evt.act_resolved_layer_idx,
                     "raw_div": float(raw_div),
                     "avg_score": float(ctl_state.avg_score),
                     "control_score": float(ctl_state.raw_score),

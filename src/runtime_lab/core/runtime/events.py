@@ -14,6 +14,8 @@ class RuntimeEvent:
     hidden_pre_norm: float
     hidden_post_norm: float
     hidden_delta_norm: float
+    measure_resolved_layer_idx: Optional[int] = None
+    act_resolved_layer_idx: Optional[int] = None
     diagnostics: Dict[str, Any] = field(default_factory=dict)
     intervention_active: bool = False
     mode: str = "runtime"

@@ -23,6 +23,9 @@ class PrefillState:
     logits: torch.Tensor
     next_token_id: int
     resolved_layer_idx: int
+    measure_resolved_layer_idx: int
+    act_resolved_layer_idx: int
+    measure_hidden: Optional[torch.Tensor]
     hidden_pre: Optional[torch.Tensor]
     hidden_post: Optional[torch.Tensor]
 
@@ -34,6 +37,7 @@ class StepResult:
     consumed_token_text: str
     predicted_next_token_id: int
     logits: torch.Tensor
+    measure_hidden: Optional[torch.Tensor]
     hidden_pre: Optional[torch.Tensor]
     hidden_post: Optional[torch.Tensor]
     diagnostics: Dict[str, Any]
@@ -48,6 +52,7 @@ class RuntimeEngine:
         tokenizer,
         device: torch.device,
         layer_idx: int,
+        measure_layer_idx: Optional[int] = None,
         diagnostics_manager: Optional[DiagnosticsManager] = None,
         intervention: Optional[Intervention] = None,
         probe_layers: Optional[list[int]] = None,
@@ -67,17 +72,27 @@ class RuntimeEngine:
         self.layers = resolve_transformer_layers(model)
         self.num_layers = len(self.layers)
         self.resolved_layer_idx = resolve_layer_index(layer_idx, self.num_layers)
+        self.act_resolved_layer_idx = int(self.resolved_layer_idx)
+        measure_layer_raw = layer_idx if measure_layer_idx is None else measure_layer_idx
+        self.measure_resolved_layer_idx = resolve_layer_index(measure_layer_raw, self.num_layers)
         self.probe_resolved = resolve_probe_layers(probe_layers or [], self.num_layers)
 
         self.diagnostics_manager = diagnostics_manager
         self.intervention_hook = HiddenInterventionHook(intervention=intervention)
+        self.measure_capture_hook: Optional[HiddenCaptureHook] = None
+        self._measure_handle = None
         self.capture_hooks: Dict[int, HiddenCaptureHook] = {}
         self._capture_handles = []
 
         self._main_handle = self.layers[self.resolved_layer_idx].register_forward_hook(self.intervention_hook)
+        if self.measure_resolved_layer_idx != self.resolved_layer_idx:
+            self.measure_capture_hook = HiddenCaptureHook()
+            self._measure_handle = self.layers[self.measure_resolved_layer_idx].register_forward_hook(
+                self.measure_capture_hook
+            )
 
         for raw_idx, resolved_idx in self.probe_resolved.items():
-            if resolved_idx == self.resolved_layer_idx:
+            if resolved_idx in (self.resolved_layer_idx, self.measure_resolved_layer_idx):
                 continue
             cap = HiddenCaptureHook()
             self.capture_hooks[int(raw_idx)] = cap
@@ -88,6 +103,12 @@ class RuntimeEngine:
             self._main_handle.remove()
         except Exception:
             pass
+        if self._measure_handle is not None:
+            try:
+                self._measure_handle.remove()
+            except Exception:
+                pass
+            self._measure_handle = None
         for handle in self._capture_handles:
             try:
                 handle.remove()
@@ -97,6 +118,8 @@ class RuntimeEngine:
 
     def reset(self) -> None:
         self.intervention_hook.reset()
+        if self.measure_capture_hook is not None:
+            self.measure_capture_hook.reset()
         for cap in self.capture_hooks.values():
             cap.reset()
         if self.diagnostics_manager is not None:
@@ -135,6 +158,13 @@ class RuntimeEngine:
             logits=logits,
             next_token_id=next_token_id,
             resolved_layer_idx=self.resolved_layer_idx,
+            measure_resolved_layer_idx=self.measure_resolved_layer_idx,
+            act_resolved_layer_idx=self.act_resolved_layer_idx,
+            measure_hidden=(
+                self.measure_capture_hook.last_hidden
+                if self.measure_capture_hook is not None
+                else self.intervention_hook.last_hidden_post
+            ),
             hidden_pre=self.intervention_hook.last_hidden_pre,
             hidden_post=self.intervention_hook.last_hidden_post,
         )
@@ -150,6 +180,8 @@ class RuntimeEngine:
         self.intervention_hook.set_active(bool(intervention_active))
         for cap in self.capture_hooks.values():
             cap.reset()
+        if self.measure_capture_hook is not None:
+            self.measure_capture_hook.reset()
 
         token_tensor = torch.tensor([[int(consumed_token_id)]], device=self.device)
         attn = torch.ones((1, prompt_len + t + 1), device=self.device, dtype=torch.long)
@@ -168,6 +200,11 @@ class RuntimeEngine:
 
         hidden_pre = self.intervention_hook.last_hidden_pre
         hidden_post = self.intervention_hook.last_hidden_post
+        measure_hidden = (
+            self.measure_capture_hook.last_hidden
+            if self.measure_capture_hook is not None
+            else hidden_post
+        )
 
         layer_states: Dict[int, torch.Tensor] = {}
         for raw_idx, cap in self.capture_hooks.items():
@@ -176,10 +213,12 @@ class RuntimeEngine:
         for raw_idx, resolved_idx in self.probe_resolved.items():
             if resolved_idx == self.resolved_layer_idx and hidden_post is not None:
                 layer_states[int(raw_idx)] = hidden_post
+            elif resolved_idx == self.measure_resolved_layer_idx and measure_hidden is not None:
+                layer_states[int(raw_idx)] = measure_hidden
 
         diagnostics = {}
-        if self.diagnostics_manager is not None and hidden_post is not None:
-            diagnostics = self.diagnostics_manager.step(hidden_post, layer_states=layer_states)
+        if self.diagnostics_manager is not None and measure_hidden is not None:
+            diagnostics = self.diagnostics_manager.step(measure_hidden, layer_states=layer_states)
 
         pre_norm = float(hidden_pre.norm().item()) if hidden_pre is not None else 0.0
         post_norm = float(hidden_post.norm().item()) if hidden_post is not None else 0.0
@@ -197,6 +236,8 @@ class RuntimeEngine:
             consumed_token_text=token_text,
             predicted_next_token_id=int(predicted_next_token_id),
             resolved_layer_idx=int(self.resolved_layer_idx),
+            measure_resolved_layer_idx=int(self.measure_resolved_layer_idx),
+            act_resolved_layer_idx=int(self.act_resolved_layer_idx),
             hidden_pre_norm=pre_norm,
             hidden_post_norm=post_norm,
             hidden_delta_norm=delta_norm,
@@ -211,6 +252,7 @@ class RuntimeEngine:
             consumed_token_text=token_text,
             predicted_next_token_id=int(predicted_next_token_id),
             logits=logits,
+            measure_hidden=measure_hidden,
             hidden_pre=hidden_pre,
             hidden_post=hidden_post,
             diagnostics=diagnostics,
