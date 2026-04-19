@@ -275,8 +275,19 @@ def advise_control(summary: Dict[str, Any]) -> Advisory:
         })
     else:
         adv.flags.append("active")
-        crit = int(status_counts.get("CRITICAL") or status_counts.get("crit") or 0)
-        warn = int(status_counts.get("WARN") or status_counts.get("warn") or 0)
+        crit = int(
+            status_counts.get("CRITICAL")
+            or status_counts.get("crit")
+            or status_counts.get("critical")
+            or 0
+        )
+        warn = int(
+            status_counts.get("WARNING")     # control writes this
+            or status_counts.get("WARN")     # legacy
+            or status_counts.get("warn")     # legacy
+            or status_counts.get("warning")  # legacy
+            or 0
+        )
         if crit == 0 and warn == 0 and (avg_div or 0) < 0.1:
             adv.flags.append("quiet-controller")
             adv.observations.append(

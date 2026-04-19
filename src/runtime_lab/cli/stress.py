@@ -121,7 +121,12 @@ def run_from_args(args) -> None:
         describe={
             "prompt": args.prompt,
             "model": args.model,
-            "layer": int(args.layer),
+            # Store as {raw, resolved}: raw preserves the original spec
+            # (possibly "mid"), resolved is the int actually used.
+            "layer": {
+                "raw": args.layer,
+                "resolved": resolve_semantic_layer(args.layer, None),
+            },
             "type": args.type,
             "magnitude": float(args.magnitude),
             "relative": not args.absolute_magnitude,

@@ -372,4 +372,7 @@ def run_control_experiment(
         "dashboard_path": summary.get("artifacts", {}).get("dashboard_path"),
     }
 
-    return full_text, artifacts
+    # Returning the summary (dict) so sweep driver and programmatic callers
+    # can uniformly call .get(). Legacy two-tuple callers (internal only)
+    # should read from the summary directly instead.
+    return summary
