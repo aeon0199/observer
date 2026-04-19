@@ -44,13 +44,22 @@ Last updated: **2026-04-19** · Active agent: Claude Opus 4.7 (1M context) · Pr
 - **Program structure**: three mapping questions, Q1–Q3 in §3. Each has a crisp stop condition so the work terminates cleanly.
 - **Controller status**: **paused**, not dead. §4 defines the evidence that would bring controller research back to active status.
 - **Instrument status**: fully operational. Warm daemon, sampling, seed sweeps, drift-opposing actuation, decoupled measure/act layers, per-step diagnostics — all verified and working (see RESEARCH_CONTROLLER.md TD1, §F17–F29).
-- **Next recommended action**: **M1.2 — run a second Qwen3 prompt suite to close Q1's prompt-breadth requirement.** M1.1 produced a within-Qwen3 AUROC of 0.82 on sourdough (passes the stop threshold) but Q1's evidence standard also requires ≥2 prompts. Run ~10 new control runs (5 seeds × 2 cells) on a non-sourdough prompt already in the registry (e.g., "Describe the water cycle" or "Explain how airplanes fly"), then rerun `scripts/analyze_branchpoints.py` on the combined corpus. If Qwen3 within-model AUROC holds ≥0.80 across both prompts, Q1 is closed and we move to Q2.
+- **Next recommended action**: **M2.1 — offline perturbation propagation analysis.** Q1 is closed (F31). Q2 asks how a perturbation at layer L evolves through the stack. We already have stress runs at varying `intervention_layer` with probe hooks at multiple layers — extract per-layer delta L2 norms from existing events.jsonl data (no new runs needed initially). Write a companion analyzer similar to `scripts/analyze_branchpoints.py`. Expected time: ~1 hour offline. If existing data isn't rich enough (e.g., only 2 probe layers logged), queue M2.2 as a code+experiment task for Codex.
 
 ---
 
 ## 2a. Mapping-program findings
 
-- **F30** — **(M1.1 offline branchpoint analysis on Qwen3-1.7B) Q1 partially answered: the stop-threshold AUROC is met on one prompt, but the evidence standard needs a second prompt to close.** Using existing Qwen3-1.7B control runs with pair-level train/test split and shadow-features-only (after fixing a circular-feature leak in Codex's initial smoke test, which had reused active-event features that tautologically correlate with the flip label): held-out AUROC on the Qwen3-only sourdough × opposing-anchor × L=-1 slice is **0.82** across 12 valid pairs / 576 step rows / 4 seeds.
+- **F31** — **(M1.2) Q1 CLOSED on Qwen3-1.7B. Within-prompt flippability predictor clears the threshold on both prompts tested — but the predictive features are prompt-class-dependent.** Ran 10 additional control runs on a second prompt ("Describe the water cycle in a few sentences.") using the same config that worked on sourdough (L=-1 measure/act, additive opposing+anchor, mag=0.3/0.6, temp=0.8, 5 seeds). Analyzer results on Qwen3-only, opposing-anchor slice:
+  - **Sourdough alone** (12 pairs / 576 rows): held-out AUROC **0.82**, top features `spectral.permutation_change` (+), `layer_stiffness.-1.elasticity` (+), `svd.top1_energy_frac` (+)
+  - **Water cycle alone** (5 pairs / 240 rows): held-out AUROC **0.86**, top feature `step_idx` alone reaches AUROC 0.80; other features include `svd.effective_rank` (+), `spectral.permutation_change` (**negative** — flips sign vs sourdough)
+  - **Combined** (17 pairs / 816 rows): held-out AUROC 0.99 — likely inflated by pair-level random split landing easy watercycle pairs in test; per-prompt numbers above are the trustworthy ones
+  - **Universal predictor across prompts**: `step_idx` (later tokens more flippable in both). Mechanistically sensible: baseline divergence accumulates with length, branchpoint density rises.
+  - **Prompt-class dependence**: `spectral.permutation_change` is a POSITIVE predictor on sourdough (how-to-style) and NEGATIVE on watercycle (descriptive). This means different prompt classes drive Qwen3 into different trajectory structures, and what "looks like" a branchpoint geometrically is prompt-type-dependent.
+  - **Q1 verdict (Qwen3-1.7B)**: ✓ CLOSED. Stop condition (AUROC ≥ 0.80) met on both prompts independently. Evidence standard (≥3 seeds, ≥2 prompts, within Qwen3) met.
+  - Confidence: **high** on the main claim (flippability is predictable per-prompt); **medium** on the prompt-class-dependence claim (n=2 prompts, want more to confirm the structure).
+
+- **F30** — **(M1.1 offline branchpoint analysis on Qwen3-1.7B) [superseded by F31] Q1 partially answered: the stop-threshold AUROC is met on one prompt, but the evidence standard needs a second prompt to close.** Using existing Qwen3-1.7B control runs with pair-level train/test split and shadow-features-only (after fixing a circular-feature leak in Codex's initial smoke test, which had reused active-event features that tautologically correlate with the flip label): held-out AUROC on the Qwen3-only sourdough × opposing-anchor × L=-1 slice is **0.82** across 12 valid pairs / 576 step rows / 4 seeds.
   - Stop condition (§3 Q1): AUROC ≥ 0.80. ✓ met on this slice.
   - Evidence standard (§3 Q1): ≥3 seeds AND ≥2 prompts within Qwen3-1.7B. Seeds ✓ (4). Prompts ✗ (only sourdough has valid shadow/active pairs in the archive).
   - Top predictive features (shadow trajectory only, clean): `spectral.permutation_change` (trajectory-axis FFT response), `spectral.total_power` (higher = less flippable), `layer_stiffness.-1.elasticity` (low final-layer velocity = flippable), `svd.top1_energy_frac` (concentrated trajectory = flippable), `step_idx` (later tokens more flippable).
@@ -177,7 +186,17 @@ Order: do M1.1 first (free, might answer Q1 from existing data). Then M2.1 and M
 - **Outcome**: _(filled when complete)_
 - **Follow-ups**: _(filled when complete)_
 
-### [ ] M1.2 — Close Q1 with a second Qwen3 prompt
+### [x] M1.2 — Close Q1 with a second Qwen3 prompt *(complete 2026-04-19)*
+- **Outcome**: ran 10 control runs on "Describe the water cycle in a few sentences." with same config as M1.1's passing slice. All active cells fired (8-10 interventions per seed). Rerun of `scripts/analyze_branchpoints.py` on Qwen3-only opposing-anchor corpus:
+  - Sourdough: AUROC 0.82 ✓
+  - Water cycle: AUROC 0.86 ✓
+  - Both prompts clear the 0.80 threshold independently
+  - Top features differ between prompts: sourdough predictors are trajectory-geometry features (spectral.permutation_change, elasticity); water cycle's strongest single predictor is `step_idx` alone (AUROC 0.80)
+- **Q1 verdict**: ✓ CLOSED. See F31.
+- **Follow-ups**:
+  - Interesting side-finding worth its own write-up: `spectral.permutation_change` flips sign between prompt classes. Suggests Qwen3 uses different trajectory structures for how-to vs descriptive generation. Could be explored later as a small mapping sub-question.
+
+### [~] M1.2 — Close Q1 with a second Qwen3 prompt (original task entry, preserved)
 - **Status**: queued 2026-04-19. Runs-only task (Claude).
 - **Question**: Does the M1.1 classifier (shadow-trajectory features → flip/no-flip prediction) generalize to a second Qwen3-1.7B prompt? Needed to meet Q1's ≥2 prompts evidence standard.
 - **Design**:
@@ -219,6 +238,7 @@ Order: do M1.1 first (free, might answer Q1 from existing data). Then M2.1 and M
 - **2026-04-19 · Program defined.** Pivoted from controller-focused to mapping-focused. Three questions (Q1 branchpoint geometry, Q2 propagation, Q3 basin structure) with stop conditions. Controller-return criteria specified. Next: M1.1.
 - **2026-04-19 · M1.1 ran, Qwen3 AUROC 0.82.** Codex wrote `scripts/analyze_branchpoints.py`. Claude caught + fixed a circular-feature leak (features from active events included intervention_applied, scale_used, etc. — tautological). With honest shadow-trajectory features on the Qwen3-1.7B sourdough slice, held-out AUROC is **0.82** across 12 pairs / 4 seeds — clears Q1's 0.80 threshold. F30 added. Remaining Q1 gap: ≥2 prompts evidence standard. M1.2 queued: run a second Qwen3 prompt suite.
 - **2026-04-19 · Scope correction.** Human redirected: mapping program is Qwen3-1.7B, not cross-model. Earlier M1.2 spec (add logit-margin logging for cross-model generalization) deferred to M1.3 / later work. Current M1.2 is a simple 10-run experiment on a second Qwen3 prompt.
+- **2026-04-19 · M1.2 complete. Q1 CLOSED.** Ran 10 water-cycle control runs, reanalyzed. Sourdough 0.82, water-cycle 0.86 — both pass 0.80 within-Qwen3. F31 added. Side-finding: `spectral.permutation_change` flips sign between prompt classes, suggesting prompt-class-dependent trajectory structure. Next: M2.1 propagation analysis.
 
 _(For sessions covering the controller arc 2026-02 through 2026-04-19, see [RESEARCH_CONTROLLER.md](RESEARCH_CONTROLLER.md) §5.)_
 
