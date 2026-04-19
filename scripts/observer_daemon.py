@@ -119,7 +119,7 @@ def _build_config_hysteresis(cfg: Dict[str, Any]):
 
 def _build_config_control(cfg: Dict[str, Any]):
     from runtime_lab.config.schemas import ControlConfig
-    out = ControlConfig(
+    return ControlConfig(
         prompt=cfg["prompt"],
         model_key=cfg.get("model"),
         max_new_tokens=int(cfg.get("max_tokens", 64)),
@@ -128,16 +128,19 @@ def _build_config_control(cfg: Dict[str, Any]):
         measure_layer=int(cfg.get("measure_layer", -1)),
         act_layer=int(cfg.get("act_layer", -1)),
         intervention_type=str(cfg.get("intervention_type", "scaling")),
+        additive_warn_magnitude=float(cfg.get("additive_warn_magnitude", 0.3)),
+        additive_crit_magnitude=float(cfg.get("additive_crit_magnitude", 0.6)),
+        additive_seed=int(cfg.get("additive_seed", 42)),
+        additive_direction=str(cfg.get("additive_direction", "opposing")),
+        additive_reference=str(cfg.get("additive_reference", "ema")),
+        ema_alpha=float(cfg.get("ema_alpha", 0.9)),
+        ema_warmup_tokens=int(cfg.get("ema_warmup_tokens", 3)),
+        anchor_tokens=int(cfg.get("anchor_tokens", 3)),
         shadow=bool(cfg.get("shadow", False)),
         temperature=float(cfg.get("temperature", 0.0)),
         top_p=float(cfg.get("top_p", 1.0)),
         top_k=int(cfg.get("top_k", 0)),
     )
-    # Controller knobs (E8 — additive mode)
-    out.additive_warn_magnitude = float(cfg.get("additive_warn_magnitude", 0.3))
-    out.additive_crit_magnitude = float(cfg.get("additive_crit_magnitude", 0.6))
-    out.additive_seed = int(cfg.get("additive_seed", 42))
-    return out
 
 
 def _run_request(request: Dict[str, Any], backend) -> Dict[str, Any]:

@@ -5,7 +5,7 @@ import os
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import torch
 
@@ -13,7 +13,12 @@ from runtime_lab.config.schemas import ControlConfig, DiagnosticsConfig
 from runtime_lab.core.backend.loader import load_model_with_backend
 from runtime_lab.core.diagnostics.manager import DiagnosticsManager, summarize_diagnostics_health
 from runtime_lab.core.interventions.factory import build_intervention
-from runtime_lab.core.interventions.additive import DynamicAdditiveIntervention, MagnitudeState
+from runtime_lab.core.interventions.additive import (
+    DirectionState,
+    DirectionalAdditiveIntervention,
+    DynamicAdditiveIntervention,
+    MagnitudeState,
+)
 from runtime_lab.core.interventions.scaling import DynamicScalingIntervention, ScaleState
 from runtime_lab.core.io.artifacts import ensure_dir
 from runtime_lab.core.io.hashing import hash_config
@@ -125,23 +130,36 @@ def run_control_experiment(
 
     scale_state = ScaleState(1.0)
     magnitude_state = MagnitudeState(0.0)
+    direction_state = DirectionState()
     itype = str(config.intervention_type).lower().strip()
+    additive_direction = str(getattr(config, "additive_direction", "opposing")).lower().strip()
+    additive_reference = str(getattr(config, "additive_reference", "ema")).lower().strip()
+    ema_alpha = min(0.999, max(0.0, float(getattr(config, "ema_alpha", 0.9))))
+    ema_warmup_tokens = max(0, int(getattr(config, "ema_warmup_tokens", 3)))
+    anchor_tokens = max(1, int(getattr(config, "anchor_tokens", 3)))
 
     # Magnitudes used when the controller escalates. Informed by E6/F18:
     # additive@1.0 produced logit_kl=10.40 at L27 (strong effect). For a
     # controller we start conservatively smaller.
-    ADDITIVE_WARN_MAG = float(getattr(config, "additive_warn_magnitude", 0.3))
-    ADDITIVE_CRIT_MAG = float(getattr(config, "additive_crit_magnitude", 0.6))
+    ADDITIVE_WARN_MAG = float(config.additive_warn_magnitude)
+    ADDITIVE_CRIT_MAG = float(config.additive_crit_magnitude)
 
     if itype == "scaling":
         intervention = DynamicScalingIntervention(scale_state)
         intervention_name = intervention.name
     elif itype == "additive":
-        intervention = DynamicAdditiveIntervention(
-            magnitude_state,
-            seed=int(getattr(config, "additive_seed", 42)),
-            relative=True,
-        )
+        if additive_direction == "opposing":
+            intervention = DirectionalAdditiveIntervention(
+                magnitude_state,
+                direction_state,
+                relative=True,
+            )
+        else:
+            intervention = DynamicAdditiveIntervention(
+                magnitude_state,
+                seed=int(config.additive_seed),
+                relative=True,
+            )
         intervention_name = intervention.name
     elif itype == "sae":
         intervention = build_intervention("sae", **(intervention_kwargs or {}))
@@ -172,6 +190,11 @@ def run_control_experiment(
     n_cooldown = 0
     sum_raw_div = 0.0
     sum_avg_score = 0.0
+    ema_hidden: Optional[torch.Tensor] = None
+    ema_steps = 0
+    anchor_sum: Optional[torch.Tensor] = None
+    anchor_hidden: Optional[torch.Tensor] = None
+    anchor_steps = 0
 
     try:
         print(f"\n{Color.CYAN}{'=' * 72}{Color.RESET}")
@@ -211,11 +234,89 @@ def run_control_experiment(
                 return ADDITIVE_WARN_MAG
             return 0.0
 
+        def _hidden_vec(hidden: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+            if hidden is None:
+                return None
+            return hidden.detach().float().reshape(-1).cpu()
+
+        def _set_opposing_state(
+            current_hidden: Optional[torch.Tensor],
+            status: str,
+        ) -> tuple[float, float]:
+            nonlocal ema_hidden, ema_steps, anchor_sum, anchor_hidden, anchor_steps
+
+            if current_hidden is None:
+                direction_state.direction = None
+                magnitude_state.value = 0.0
+                return 0.0, 0.0
+
+            current_vec = _hidden_vec(current_hidden)
+            if current_vec is None:
+                direction_state.direction = None
+                magnitude_state.value = 0.0
+                return 0.0, 0.0
+
+            if additive_reference == "anchor":
+                if anchor_sum is None:
+                    anchor_sum = current_vec.clone()
+                    anchor_steps = 1
+                elif anchor_hidden is None:
+                    anchor_sum = anchor_sum + current_vec
+                    anchor_steps += 1
+
+                if anchor_hidden is None and anchor_steps >= anchor_tokens:
+                    anchor_hidden = anchor_sum / float(anchor_steps)
+
+                baseline = anchor_hidden.clone() if anchor_hidden is not None else None
+                reference_norm = float(anchor_hidden.norm().item()) if anchor_hidden is not None else 0.0
+                warm_ready = anchor_hidden is not None
+            else:
+                if ema_hidden is None:
+                    ema_hidden = current_vec.clone()
+
+                baseline = ema_hidden.clone()
+                reference_norm = float(ema_hidden.norm().item())
+                warm_ready = ema_steps >= ema_warmup_tokens
+
+            if baseline is None:
+                direction_state.direction = None
+                magnitude_state.value = 0.0
+                return 0.0, reference_norm
+
+            drift_vec = current_vec - baseline
+            drift_norm = float(drift_vec.norm().item())
+            target_mag = _magnitude_for_status(status)
+
+            if warm_ready and target_mag > 0.0 and drift_norm > 1e-8:
+                direction_state.direction = (-drift_vec / drift_norm).cpu()
+                magnitude_state.value = target_mag
+            else:
+                direction_state.direction = None
+                magnitude_state.value = 0.0
+
+            if additive_reference != "anchor":
+                ema_hidden = (ema_alpha * ema_hidden) + ((1.0 - ema_alpha) * current_vec)
+                ema_steps += 1
+                reference_norm = float(ema_hidden.norm().item())
+
+            return drift_norm, reference_norm
+
         if prefill.hidden_post is not None:
             diagnostics0 = diagnostics.step(prefill.hidden_post, layer_states={int(config.measure_layer): prefill.hidden_post})
             ctl_state = controller.update(diagnostics0)
             if itype == "additive":
-                magnitude_state.value = _magnitude_for_status(getattr(ctl_state, "status", "OK"))
+                if additive_direction == "opposing":
+                    if additive_reference == "anchor":
+                        anchor_sum = None
+                        anchor_hidden = None
+                        anchor_steps = 0
+                    else:
+                        ema_hidden = _hidden_vec(prefill.hidden_post)
+                        ema_steps = 0
+                    direction_state.direction = None
+                    magnitude_state.value = 0.0
+                else:
+                    magnitude_state.value = _magnitude_for_status(getattr(ctl_state, "status", "OK"))
             else:
                 scale_state.value = float(policy.next_scale(ctl_state))
         else:
@@ -223,6 +324,7 @@ def run_control_experiment(
             ctl_state = controller.state
             if itype == "additive":
                 magnitude_state.value = 0.0
+                direction_state.direction = None
             else:
                 scale_state.value = 1.0
 
@@ -251,9 +353,23 @@ def run_control_experiment(
 
                 raw_div = float(step.diagnostics.get("divergence", 0.0))
                 ctl_state = controller.update(step.diagnostics)
+                drift_norm = 0.0
+                reference_norm = 0.0
+                if additive_reference == "anchor":
+                    reference_norm = float(anchor_hidden.norm().item()) if anchor_hidden is not None else 0.0
+                else:
+                    reference_norm = float(ema_hidden.norm().item()) if ema_hidden is not None else 0.0
                 if itype == "additive":
-                    next_scale = _magnitude_for_status(getattr(ctl_state, "status", "OK"))
-                    magnitude_state.value = float(next_scale)
+                    if additive_direction == "opposing":
+                        observed_hidden = step.hidden_pre if step.hidden_pre is not None else step.hidden_post
+                        drift_norm, reference_norm = _set_opposing_state(
+                            observed_hidden,
+                            str(getattr(ctl_state, "status", "OK")),
+                        )
+                        next_scale = float(magnitude_state.value)
+                    else:
+                        next_scale = _magnitude_for_status(getattr(ctl_state, "status", "OK"))
+                        magnitude_state.value = float(next_scale)
                 else:
                     next_scale = float(policy.next_scale(ctl_state))
                     scale_state.value = float(next_scale)
@@ -316,6 +432,11 @@ def run_control_experiment(
                     "intervention_applied": bool(intervention_active),
                     "intervention_type": str(config.intervention_type),
                     "intervention_name": str(intervention_name),
+                    "additive_direction": additive_direction if itype == "additive" else None,
+                    "additive_reference": additive_reference if (itype == "additive" and additive_direction == "opposing") else None,
+                    "controller_drift_norm": float(drift_norm),
+                    "controller_reference_hidden_norm": float(reference_norm),
+                    "controller_ema_hidden_norm": float(reference_norm) if additive_reference == "ema" else None,
                     "backend": backend_result.backend,
                 }
 

@@ -37,6 +37,36 @@ def add_control_args(parser: argparse.ArgumentParser) -> None:
                         help="Additive intervention magnitude when controller is CRITICAL")
     parser.add_argument("--additive-seed", type=int, default=42,
                         help="Random direction seed for additive intervention")
+    parser.add_argument(
+        "--additive-direction",
+        default="opposing",
+        choices=["opposing", "random"],
+        help="Use drift-opposing control (default) or the E8 MVP random-direction baseline.",
+    )
+    parser.add_argument(
+        "--additive-reference",
+        default="ema",
+        choices=["ema", "anchor"],
+        help="Reference used by drift-opposing additive control.",
+    )
+    parser.add_argument(
+        "--ema-alpha",
+        type=float,
+        default=0.9,
+        help="EMA decay used by drift-opposing additive control.",
+    )
+    parser.add_argument(
+        "--ema-warmup-tokens",
+        type=int,
+        default=3,
+        help="Number of clean tokens to observe before drift-opposing control can fire.",
+    )
+    parser.add_argument(
+        "--anchor-tokens",
+        type=int,
+        default=3,
+        help="Number of clean tokens to average into the frozen anchor reference.",
+    )
     parser.add_argument("--shadow", action="store_true")
     parser.add_argument("--ma-window", type=int, default=3)
     parser.add_argument("--threshold-warn", type=float, default=0.55)
@@ -69,6 +99,14 @@ def _run_one(args, seed: int):
         measure_layer=args.measure_layer,
         act_layer=args.act_layer,
         intervention_type=args.type,
+        additive_warn_magnitude=float(getattr(args, "additive_warn_magnitude", 0.3)),
+        additive_crit_magnitude=float(getattr(args, "additive_crit_magnitude", 0.6)),
+        additive_seed=int(getattr(args, "additive_seed", 42)),
+        additive_direction=str(getattr(args, "additive_direction", "opposing")),
+        additive_reference=str(getattr(args, "additive_reference", "ema")),
+        ema_alpha=float(getattr(args, "ema_alpha", 0.9)),
+        ema_warmup_tokens=int(getattr(args, "ema_warmup_tokens", 3)),
+        anchor_tokens=int(getattr(args, "anchor_tokens", 3)),
         shadow=bool(args.shadow),
         ma_window=args.ma_window,
         threshold_warn=args.threshold_warn,
@@ -81,11 +119,6 @@ def _run_one(args, seed: int):
         top_p=float(getattr(args, "top_p", 1.0)),
         top_k=int(getattr(args, "top_k", 0)),
     )
-    # Attach additive-controller knobs as attrs (ControlConfig is a
-    # dataclass that doesn't declare them; adaptive_runner reads via getattr).
-    cfg.additive_warn_magnitude = float(getattr(args, "additive_warn_magnitude", 0.3))
-    cfg.additive_crit_magnitude = float(getattr(args, "additive_crit_magnitude", 0.6))
-    cfg.additive_seed = int(getattr(args, "additive_seed", 42))
 
     probe_layers = resolve_probe_layers(args.probe_layers, None)
     if int(args.measure_layer) not in probe_layers:
@@ -132,6 +165,19 @@ def run_from_args(args) -> None:
             "model": args.model,
             "measure_layer": int(args.measure_layer),
             "act_layer": int(args.act_layer),
+            "type": args.type,
+            "additive_warn_magnitude": float(getattr(args, "additive_warn_magnitude", 0.3)),
+            "additive_crit_magnitude": float(getattr(args, "additive_crit_magnitude", 0.6)),
+            "additive_seed": int(getattr(args, "additive_seed", 42)),
+            "additive_direction": str(getattr(args, "additive_direction", "opposing")),
+            "additive_reference": str(getattr(args, "additive_reference", "ema")),
+            "ema_alpha": float(getattr(args, "ema_alpha", 0.9)),
+            "ema_warmup_tokens": int(getattr(args, "ema_warmup_tokens", 3)),
+            "anchor_tokens": int(getattr(args, "anchor_tokens", 3)),
+            "threshold_warn": float(args.threshold_warn),
+            "threshold_crit": float(args.threshold_crit),
+            "hold_warn": int(args.hold_warn),
+            "hold_crit": int(args.hold_crit),
             "shadow": bool(args.shadow),
         },
     )

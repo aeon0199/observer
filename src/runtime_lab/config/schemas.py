@@ -72,6 +72,14 @@ class ControlConfig(CommonRunConfig):
     measure_layer: int = -1
     act_layer: int = -1
     intervention_type: str = "scaling"
+    additive_warn_magnitude: float = 0.3
+    additive_crit_magnitude: float = 0.6
+    additive_seed: int = 42
+    additive_direction: str = "opposing"
+    additive_reference: str = "ema"
+    ema_alpha: float = 0.9
+    ema_warmup_tokens: int = 3
+    anchor_tokens: int = 3
     shadow: bool = False
     ma_window: int = 3
     threshold_warn: float = 0.55

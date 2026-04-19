@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 
@@ -16,6 +17,13 @@ class MagnitudeState:
     means "no injection this step" — the intervention becomes a no-op.
     """
     value: float = 0.0
+
+
+@dataclass
+class DirectionState:
+    """Mutable direction holder for controller-driven additive intervention."""
+
+    direction: Optional[torch.Tensor] = None
 
 
 class AdditiveIntervention(Intervention):
@@ -108,6 +116,50 @@ class DynamicAdditiveIntervention(Intervention):
             self._direction = vec
 
         direction = self._direction.to(device=hidden_state.device, dtype=hidden_state.dtype)
+        modified = hidden_state.clone()
+        last = modified[:, -1, :]
+
+        if self.relative:
+            h_norm = last.norm(dim=-1, keepdim=True)
+            delta = direction.unsqueeze(0) * (m * h_norm)
+        else:
+            delta = direction * m
+
+        modified[:, -1, :] = last + delta
+        return modified
+
+
+class DirectionalAdditiveIntervention(Intervention):
+    """Controller-driven additive intervention with an externally supplied direction.
+
+    The control loop updates both magnitude and direction. This lets the
+    controller inject a delta that explicitly opposes a measured hidden-state
+    drift vector instead of pushing in a fixed random direction.
+    """
+
+    def __init__(
+        self,
+        magnitude_state: MagnitudeState,
+        direction_state: DirectionState,
+        relative: bool = True,
+    ):
+        self.magnitude_state = magnitude_state
+        self.direction_state = direction_state
+        self.relative = bool(relative)
+        self.name = "directional_additive"
+
+    def apply(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        m = float(self.magnitude_state.value)
+        direction = self.direction_state.direction
+        if abs(m) <= 1e-8 or direction is None:
+            return hidden_state
+
+        direction = direction.detach().float().reshape(-1)
+        norm = float(direction.norm().item())
+        if norm <= 1e-12:
+            return hidden_state
+
+        direction = (direction / norm).to(device=hidden_state.device, dtype=hidden_state.dtype)
         modified = hidden_state.clone()
         last = modified[:, -1, :]
 
