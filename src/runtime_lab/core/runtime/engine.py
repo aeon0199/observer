@@ -10,6 +10,7 @@ from runtime_lab.core.interventions.base import Intervention
 from runtime_lab.core.model.layers import resolve_layer_index, resolve_probe_layers, resolve_transformer_layers
 from runtime_lab.core.runtime.events import RuntimeEvent
 from runtime_lab.core.runtime.hooks import HiddenCaptureHook, HiddenInterventionHook
+from runtime_lab.core.sampling import sample_token_id
 
 
 @dataclass
@@ -51,11 +52,17 @@ class RuntimeEngine:
         intervention: Optional[Intervention] = None,
         probe_layers: Optional[list[int]] = None,
         mode: str = "runtime",
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        top_k: int = 0,
     ):
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
         self.mode = str(mode)
+        self.temperature = float(temperature)
+        self.top_p = float(top_p)
+        self.top_k = int(top_k)
 
         self.layers = resolve_transformer_layers(model)
         self.num_layers = len(self.layers)
@@ -117,7 +124,7 @@ class RuntimeEngine:
             )
 
         logits = out.logits[:, -1, :].detach().cpu()
-        next_token_id = int(logits.argmax(dim=-1).item())
+        next_token_id = sample_token_id(logits, self.temperature, self.top_p, self.top_k)
 
         return PrefillState(
             prompt=prompt,
@@ -157,7 +164,7 @@ class RuntimeEngine:
             )
 
         logits = out.logits[:, -1, :].detach().cpu()
-        predicted_next_token_id = int(logits.argmax(dim=-1).item())
+        predicted_next_token_id = sample_token_id(logits, self.temperature, self.top_p, self.top_k)
 
         hidden_pre = self.intervention_hook.last_hidden_pre
         hidden_post = self.intervention_hook.last_hidden_post

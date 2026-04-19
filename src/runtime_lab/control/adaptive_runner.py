@@ -138,6 +138,9 @@ def run_control_experiment(
         intervention=intervention,
         probe_layers=diag_cfg.probe_layers,
         mode="control",
+        temperature=float(getattr(config, "temperature", 0.0)),
+        top_p=float(getattr(config, "top_p", 1.0)),
+        top_k=int(getattr(config, "top_k", 0)),
     )
 
     generated_text = ""
@@ -338,6 +341,15 @@ def run_control_experiment(
             summary["artifacts"]["dashboard_path"] = str(dashboard_path)
         except Exception as e:
             summary["dashboard_error"] = str(e)
+
+    try:
+        from runtime_lab.core.advisory import analyze as _analyze_advisory
+        # Pass config through so advise_control can check shadow flag.
+        summary_for_advisor = dict(summary)
+        summary_for_advisor["config"] = run_config
+        summary["advisory"] = _analyze_advisory("control", summary_for_advisor)
+    except Exception as e:
+        summary["advisory"] = {"error": f"advisory failed: {e}"}
 
     save_json(str(summary_path), summary)
 

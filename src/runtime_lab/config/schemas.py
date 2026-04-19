@@ -13,6 +13,10 @@ class CommonRunConfig:
     nnsight_remote: bool = False
     nnsight_device: Optional[str] = None
     seed: Optional[int] = 42
+    # Sampling controls. temperature<=0 reproduces legacy greedy decoding.
+    temperature: float = 0.0
+    top_p: float = 1.0
+    top_k: int = 0
 
 
 @dataclass
@@ -25,6 +29,9 @@ class DiagnosticsConfig:
     svd_window: int = 8
     svd_top_k: int = 8
     layer_window: int = 5
+    # Token-time FFT window for SpectralTrajectoryProbe (real sequence-axis FFT).
+    spectral_window: int = 16
+    spectral_bands: int = 6
 
 
 @dataclass
@@ -32,6 +39,12 @@ class StressConfig(CommonRunConfig):
     intervention_layer: int = -1
     intervention_type: str = "additive"
     intervention_magnitude: float = 2.0
+    # When True, `intervention_magnitude` is interpreted as a fraction of the
+    # current hidden-state L2 norm (i.e. magnitude=0.1 means the injected
+    # delta has 10% the magnitude of the hidden state). This makes the knob
+    # meaningful across models / layers whose activations live at very
+    # different scales. When False, magnitude is absolute (legacy behavior).
+    intervention_magnitude_relative: bool = True
     intervention_start: int = 5
     intervention_duration: int = 10
     with_diagnostics: bool = True
@@ -40,6 +53,18 @@ class StressConfig(CommonRunConfig):
 @dataclass
 class HysteresisConfig(CommonRunConfig):
     original_question_label: str = "ORIGINAL_QUESTION"
+    # Perturbation class. "prompt" (default, legacy) injects a synthetic
+    # <REFLECTION> block into the context — this measures *prompt
+    # contamination persistence*, not internal dynamics. "noise" instead
+    # injects a seeded additive perturbation onto hidden states for a
+    # configurable window during PERTURB, then removes it for REASK —
+    # this is the actual "internal hysteresis" question.
+    perturbation_mode: str = "prompt"
+    noise_layer: int = -1
+    noise_magnitude: float = 0.15  # relative to hidden norm
+    noise_start: int = 3
+    noise_duration: int = 8
+    noise_seed: int = 1234
 
 
 @dataclass

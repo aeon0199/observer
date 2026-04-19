@@ -33,6 +33,65 @@ class StageTelemetry:
     context_logits: Optional[torch.Tensor] = None
 
 
+class _TokenwiseNoiseHook:
+    """Forward hook that adds a seeded random direction to the last-token hidden
+    state for a configurable window of generation steps. Magnitude is relative
+    to the current hidden-state norm so the knob is model-agnostic.
+
+    Used by the 'noise' hysteresis perturbation_mode to inject a real
+    hidden-state perturbation during PERTURB that is then removed for REASK.
+    """
+
+    def __init__(self, magnitude: float, start: int, duration: int, seed: int):
+        self.magnitude = float(magnitude)
+        self.start = int(start)
+        self.duration = int(duration)
+        self.seed = int(seed)
+        self._direction: Optional[torch.Tensor] = None
+        self._step = 0
+        self.active_steps: list = []
+
+    def reset(self):
+        self._step = 0
+        self._direction = None
+        self.active_steps = []
+
+    def __call__(self, module, inputs, output):
+        hidden = output[0] if isinstance(output, tuple) else output
+        if not isinstance(hidden, torch.Tensor):
+            return output
+
+        self._step += 1
+        in_window = (self._step >= self.start) and (self._step < self.start + self.duration)
+        if not in_window:
+            return output
+
+        # Skip the large prefill pass (we only want to perturb single-token
+        # generation steps, not the initial prompt forward).
+        if hidden.dim() != 3 or hidden.shape[1] != 1:
+            return output
+
+        if self._direction is None:
+            dim = hidden.shape[-1]
+            g = torch.Generator(device="cpu")
+            g.manual_seed(self.seed)
+            vec = torch.randn(dim, generator=g, device="cpu", dtype=torch.float32)
+            self._direction = vec / (vec.norm() + 1e-12)
+
+        direction = self._direction.to(device=hidden.device, dtype=hidden.dtype)
+        h_last = hidden[:, -1, :]
+        h_norm = h_last.norm(dim=-1, keepdim=True)
+        delta = direction.unsqueeze(0) * (self.magnitude * h_norm)
+
+        new_hidden = hidden.clone()
+        new_hidden[:, -1, :] = h_last + delta
+        self.active_steps.append(int(self._step))
+
+        if isinstance(output, tuple):
+            return (new_hidden, *output[1:])
+        return new_hidden
+
+
 def _set_deterministic_state(seed: Optional[int]) -> None:
     if seed is None:
         return
@@ -133,12 +192,18 @@ def _greedy_append_tokens(
     next_token_logits: torch.Tensor,
     max_new_tokens: int,
     current_seq_len: int,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+    top_k: int = 0,
 ) -> tuple[torch.Tensor, Any, torch.Tensor]:
+    from runtime_lab.core.sampling import sample_token_id
+
     if max_new_tokens <= 0:
         return generated_ids, past_key_values, next_token_logits
 
     last_logits = next_token_logits
-    next_token = last_logits.argmax(dim=-1, keepdim=True)
+    tok_id = sample_token_id(last_logits, temperature, top_p, top_k)
+    next_token = torch.tensor([[tok_id]], device=device)
 
     with torch.no_grad():
         for step in range(int(max_new_tokens)):
@@ -162,7 +227,8 @@ def _greedy_append_tokens(
             if tokenizer.eos_token_id is not None and int(next_token.item()) == int(tokenizer.eos_token_id):
                 break
 
-            next_token = last_logits.argmax(dim=-1, keepdim=True)
+            tok_id = sample_token_id(last_logits, temperature, top_p, top_k)
+            next_token = torch.tensor([[tok_id]], device=device)
 
     return generated_ids, past_key_values, last_logits
 
@@ -176,6 +242,9 @@ def _generate_from_seed_cache(
     prefix_text: str = "",
     max_new_tokens: int = 128,
     return_kv_cache: bool = False,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+    top_k: int = 0,
 ) -> StageTelemetry:
     capture_hook.reset()
 
@@ -217,6 +286,9 @@ def _generate_from_seed_cache(
         next_token_logits=next_token_logits,
         max_new_tokens=max_new_tokens,
         current_seq_len=current_seq_len,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
     )
 
     decoded = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
@@ -247,6 +319,9 @@ def _generate_continuation(
     prior_kv_cache: Any,
     prior_seq_len: int,
     max_new_tokens: int = 128,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+    top_k: int = 0,
 ) -> StageTelemetry:
     capture_hook.reset()
 
@@ -278,6 +353,9 @@ def _generate_continuation(
         next_token_logits=next_token_logits,
         max_new_tokens=max_new_tokens,
         current_seq_len=current_seq_len,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
     )
 
     full_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
@@ -393,12 +471,36 @@ def run_hysteresis_experiment(
         "max_new_tokens": int(config.max_new_tokens),
         "seed": int(config.seed) if config.seed is not None else None,
         "original_question_label": str(config.original_question_label),
+        "perturbation_mode": str(getattr(config, "perturbation_mode", "prompt")),
+        "noise_layer": int(getattr(config, "noise_layer", -1)),
+        "noise_magnitude": float(getattr(config, "noise_magnitude", 0.15)),
+        "noise_start": int(getattr(config, "noise_start", 3)),
+        "noise_duration": int(getattr(config, "noise_duration", 8)),
+        "noise_seed": int(getattr(config, "noise_seed", 1234)),
     }
     cfg_hash = hash_config(run_config)
 
     layers = resolve_transformer_layers(model)
+    num_layers = len(layers)
     capture_hook = HiddenCaptureHook()
     handle = layers[-1].register_forward_hook(capture_hook)
+
+    # Resolve semantic noise_layer ("mid" etc.) against this model's depth.
+    raw_noise_layer = getattr(config, "noise_layer", -1)
+    try:
+        from runtime_lab.cli._common import resolve_semantic_layer
+        resolved_noise_layer = resolve_semantic_layer(raw_noise_layer, num_layers)
+    except Exception:
+        resolved_noise_layer = int(raw_noise_layer) if isinstance(raw_noise_layer, int) else num_layers // 2 - 1
+    run_config["noise_layer_resolved"] = int(resolved_noise_layer)
+    run_config["num_layers"] = int(num_layers)
+
+    samp = {
+        "temperature": float(getattr(config, "temperature", 0.0)),
+        "top_p": float(getattr(config, "top_p", 1.0)),
+        "top_k": int(getattr(config, "top_k", 0)),
+    }
+    run_config.update(samp)
 
     try:
         seed_cache = build_seed_cache(
@@ -416,28 +518,74 @@ def run_hysteresis_experiment(
             capture_hook=capture_hook,
             seed_cache=seed_cache.clone(),
             max_new_tokens=int(config.max_new_tokens),
+            **samp,
         )
         if base.context_logits is None:
             raise RuntimeError("Missing BASE context logits")
 
-        delta = _telemetry_to_reflection(base.stats)
+        perturbation_mode = str(getattr(config, "perturbation_mode", "prompt") or "prompt").lower()
+        noise_handle = None
+        delta = None
 
-        perturb_prefix = (
-            "\n\n"
-            + delta
-            + "\n\nContinue your reasoning, using the reflection above to stay stable and consistent."
-        )
-        _set_deterministic_state(config.seed)
-        perturb = _generate_from_seed_cache(
-            model=model,
-            tokenizer=tokenizer,
-            device=device,
-            capture_hook=capture_hook,
-            seed_cache=seed_cache.clone(),
-            prefix_text=perturb_prefix,
-            max_new_tokens=int(config.max_new_tokens),
-            return_kv_cache=True,
-        )
+        if perturbation_mode == "noise":
+            # Hidden-state perturbation path. Attach a noise-injection forward
+            # hook to the resolved layer (semantic "mid" etc.), remove the
+            # (final-layer) capture hook temporarily, re-register it AFTER the
+            # noise hook — this guarantees the capture sees the post-perturbation
+            # output when noise_layer == -1.
+            noise_layer_idx = int(resolved_noise_layer)
+            if noise_layer_idx < 0:
+                noise_layer_idx = num_layers + noise_layer_idx
+            noise_layer_idx = max(0, min(num_layers - 1, noise_layer_idx))
+
+            noise_hook = _TokenwiseNoiseHook(
+                magnitude=float(getattr(config, "noise_magnitude", 0.15)),
+                start=int(getattr(config, "noise_start", 3)),
+                duration=int(getattr(config, "noise_duration", 8)),
+                seed=int(getattr(config, "noise_seed", 1234)),
+            )
+            handle.remove()
+            noise_handle = layers[noise_layer_idx].register_forward_hook(noise_hook)
+            handle = layers[-1].register_forward_hook(capture_hook)
+
+            _set_deterministic_state(config.seed)
+            perturb = _generate_from_seed_cache(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                capture_hook=capture_hook,
+                seed_cache=seed_cache.clone(),
+                prefix_text="",
+                max_new_tokens=int(config.max_new_tokens),
+                return_kv_cache=True,
+                **samp,
+            )
+            perturb.stats["perturbation_mode"] = "noise"
+            perturb.stats["noise_active_steps"] = list(noise_hook.active_steps)
+            # Remove noise for REASK — perturbation is "off" from here on.
+            noise_handle.remove()
+            noise_handle = None
+        else:
+            delta = _telemetry_to_reflection(base.stats)
+            perturb_prefix = (
+                "\n\n"
+                + delta
+                + "\n\nContinue your reasoning, using the reflection above to stay stable and consistent."
+            )
+            _set_deterministic_state(config.seed)
+            perturb = _generate_from_seed_cache(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                capture_hook=capture_hook,
+                seed_cache=seed_cache.clone(),
+                prefix_text=perturb_prefix,
+                max_new_tokens=int(config.max_new_tokens),
+                return_kv_cache=True,
+                **samp,
+            )
+            perturb.stats["perturbation_mode"] = "prompt"
+
         if perturb.context_logits is None:
             raise RuntimeError("Missing PERTURB context logits")
         if perturb.kv_cache is None:
@@ -456,6 +604,7 @@ def run_hysteresis_experiment(
             prior_kv_cache=perturb.kv_cache,
             prior_seq_len=int(perturb.seq_len),
             max_new_tokens=int(config.max_new_tokens),
+            **samp,
         )
         if reask.context_logits is None:
             raise RuntimeError("Missing REASK context logits")
@@ -625,7 +774,23 @@ def run_hysteresis_experiment(
     with open(Path(run_dir) / "output_reask.txt", "w", encoding="utf-8") as f:
         f.write(reask.text)
     with open(Path(run_dir) / "delta.txt", "w", encoding="utf-8") as f:
-        f.write(delta)
+        if delta is not None:
+            f.write(delta)
+        else:
+            f.write(
+                "[noise perturbation mode — no prompt delta.\n"
+                f" hook_layer={getattr(config, 'noise_layer', -1)}"
+                f" magnitude={getattr(config, 'noise_magnitude', 0.15)} (relative)"
+                f" start={getattr(config, 'noise_start', 3)}"
+                f" duration={getattr(config, 'noise_duration', 8)}"
+                f" seed={getattr(config, 'noise_seed', 1234)}]"
+            )
+    try:
+        from runtime_lab.core.advisory import analyze as _analyze_advisory
+        summary["advisory"] = _analyze_advisory("hysteresis", summary)
+    except Exception as e:
+        summary["advisory"] = {"error": f"advisory failed: {e}"}
+
     save_json(str(Path(run_dir) / "summary.json"), summary)
 
     print(f"[Runtime Lab][hysteresis] Run dir: {run_dir}")

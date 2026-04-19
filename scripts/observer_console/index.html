@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Observer Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+            <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="16" cy="16" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="16" cy="16" r="1.5" fill="currentColor"/>
+            <path d="M16 3 L16 8 M16 24 L16 29 M3 16 L8 16 M24 16 L29 16" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-name">Observer</div>
+          <div class="brand-sub">console · v1</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-btn is-active" data-view="launch">
+          <span class="nav-icon">▶</span>
+          <span>Launch</span>
+        </button>
+        <button class="nav-btn" data-view="live">
+          <span class="nav-icon">⚡</span>
+          <span>Live</span>
+          <span class="nav-badge" id="live-badge" hidden></span>
+        </button>
+        <button class="nav-btn" data-view="archive">
+          <span class="nav-icon">▦</span>
+          <span>Archive</span>
+        </button>
+        <button class="nav-btn" data-view="compare">
+          <span class="nav-icon">⇌</span>
+          <span>Compare</span>
+          <span class="nav-badge" id="compare-badge" hidden></span>
+        </button>
+      </nav>
+
+      <div class="status-card">
+        <div class="status-label">Active job</div>
+        <div class="status-pill" id="status-pill" data-status="idle">idle</div>
+        <div class="status-meta" id="status-meta">No run in progress</div>
+      </div>
+
+      <div class="sidebar-foot">
+        <div class="foot-line">
+          <span>repo</span>
+          <code>observer</code>
+        </div>
+        <div class="foot-line">
+          <span>port</span>
+          <code>8899</code>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- LAUNCH VIEW -->
+      <section class="view view-launch is-active" data-view="launch">
+        <header class="view-head">
+          <h1>Launch experiment</h1>
+          <p class="view-sub">Configure an Observer run. Telemetry streams live as tokens are generated.</p>
+        </header>
+
+        <form id="launch-form" class="launch-form">
+          <div class="mode-tabs" role="tablist">
+            <button type="button" class="mode-tab is-active" data-mode="observe">
+              <span class="mode-label">Observe</span>
+              <span class="mode-hint">Passive telemetry</span>
+            </button>
+            <button type="button" class="mode-tab" data-mode="hysteresis">
+              <span class="mode-label">Hysteresis</span>
+              <span class="mode-hint">BASE → PERTURB → REASK</span>
+            </button>
+            <button type="button" class="mode-tab" data-mode="stress">
+              <span class="mode-label">Stress</span>
+              <span class="mode-hint">Branchpoint A/B</span>
+            </button>
+            <button type="button" class="mode-tab" data-mode="control">
+              <span class="mode-label">Control</span>
+              <span class="mode-hint">Closed loop</span>
+            </button>
+          </div>
+
+          <div class="field-grid">
+            <label class="field">
+              <span class="field-label">Model</span>
+              <select id="f-model" name="model"></select>
+              <span class="field-hint" id="f-model-hint"></span>
+            </label>
+
+            <label class="field">
+              <span class="field-label">Max tokens</span>
+              <input id="f-max-tokens" type="number" min="1" max="2048" value="64" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">Seed</span>
+              <input id="f-seed" type="number" value="42" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">Seeds (sweep)</span>
+              <input id="f-seeds" type="text" placeholder="blank = single run, or '0-4' / '1,3,7'" />
+              <span class="field-hint">Overrides single seed; runs one experiment per value</span>
+            </label>
+
+            <label class="field">
+              <span class="field-label">Probe layers</span>
+              <input id="f-probe-layers" type="text" value="auto" />
+              <span class="field-hint">'auto' = mid-stack + final, or e.g. '2,6,10,14'</span>
+            </label>
+
+            <label class="field field-wide">
+              <span class="field-label">Prompt</span>
+              <textarea id="f-prompt" rows="3">Explain what a closed-loop controller does.</textarea>
+            </label>
+          </div>
+
+          <!-- Stress-specific -->
+          <div class="mode-options" data-for="stress" hidden>
+            <div class="options-title">Intervention window</div>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">Layer</span>
+                <input id="f-layer" type="number" value="-1" />
+              </label>
+              <label class="field">
+                <span class="field-label">Type</span>
+                <select id="f-intervention">
+                  <option value="additive">additive</option>
+                  <option value="projection">projection</option>
+                  <option value="scaling">scaling</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Magnitude</span>
+                <input id="f-magnitude" type="number" step="0.05" value="0.15" />
+                <span class="field-hint">Fraction of hidden-state norm by default</span>
+              </label>
+              <label class="field field-check">
+                <input type="checkbox" id="f-absolute-magnitude" />
+                <span>Absolute magnitude (legacy)</span>
+              </label>
+              <label class="field">
+                <span class="field-label">Start token</span>
+                <input id="f-start" type="number" min="1" value="5" />
+              </label>
+              <label class="field">
+                <span class="field-label">Duration</span>
+                <input id="f-duration" type="number" min="1" value="10" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Hysteresis-specific -->
+          <div class="mode-options" data-for="hysteresis" hidden>
+            <div class="options-title">Perturbation mode</div>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">Mode</span>
+                <select id="f-perturbation-mode">
+                  <option value="prompt">prompt (REFLECTION injection)</option>
+                  <option value="noise">noise (hidden-state injection)</option>
+                </select>
+                <span class="field-hint">'prompt' tests context persistence; 'noise' tests internal dynamics</span>
+              </label>
+              <label class="field">
+                <span class="field-label">Noise layer</span>
+                <input id="f-noise-layer" type="number" value="-1" />
+              </label>
+              <label class="field">
+                <span class="field-label">Noise magnitude</span>
+                <input id="f-noise-magnitude" type="number" step="0.05" value="0.15" />
+                <span class="field-hint">Relative to hidden norm</span>
+              </label>
+              <label class="field">
+                <span class="field-label">Noise start</span>
+                <input id="f-noise-start" type="number" min="1" value="3" />
+              </label>
+              <label class="field">
+                <span class="field-label">Noise duration</span>
+                <input id="f-noise-duration" type="number" min="1" value="8" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Control-specific -->
+          <div class="mode-options" data-for="control" hidden>
+            <div class="options-title">Closed-loop settings</div>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">Measure layer</span>
+                <input id="f-measure-layer" type="number" value="-1" />
+              </label>
+              <label class="field">
+                <span class="field-label">Act layer</span>
+                <input id="f-act-layer" type="number" value="-1" />
+              </label>
+              <label class="field">
+                <span class="field-label">Type</span>
+                <select id="f-control-type">
+                  <option value="scaling">scaling</option>
+                  <option value="sae">sae</option>
+                </select>
+              </label>
+              <label class="field field-check">
+                <input type="checkbox" id="f-shadow" checked />
+                <span>Shadow mode (measurement only)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="launch-actions">
+            <button type="submit" class="btn btn-primary btn-lg" id="btn-launch">
+              <span class="btn-icon">▶</span>
+              <span>Launch run</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="btn-stop" disabled>
+              Stop
+            </button>
+            <div class="launch-msg" id="launch-msg" hidden></div>
+          </div>
+        </form>
+      </section>
+
+      <!-- LIVE VIEW -->
+      <section class="view view-live" data-view="live">
+        <header class="view-head">
+          <h1>Live telemetry</h1>
+          <p class="view-sub" id="live-sub">Waiting for a run…</p>
+        </header>
+
+        <div class="live-grid">
+          <div class="card card-span-2">
+            <div class="card-head">
+              <div class="card-title">Divergence <span class="card-unit">(VAR(1) residual)</span></div>
+              <div class="card-meta" id="meta-divergence">—</div>
+            </div>
+            <div class="chart" id="chart-divergence"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Spectral entropy</div>
+              <div class="card-meta" id="meta-entropy">—</div>
+            </div>
+            <div class="chart chart-sm" id="chart-entropy"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Hidden-state norm</div>
+              <div class="card-meta" id="meta-hidden">—</div>
+            </div>
+            <div class="chart chart-sm" id="chart-hidden"></div>
+          </div>
+
+          <div class="card card-span-2">
+            <div class="card-head">
+              <div class="card-title">Spectral bands</div>
+              <div class="card-meta">6-band power distribution per token</div>
+            </div>
+            <div class="chart" id="chart-bands"></div>
+          </div>
+
+          <div class="card card-span-2 card-tokens">
+            <div class="card-head">
+              <div class="card-title">Generated tokens</div>
+              <div class="card-meta" id="meta-tokens">0 tokens</div>
+            </div>
+            <div class="token-stream" id="token-stream"></div>
+          </div>
+
+          <div class="card card-span-4 card-logs">
+            <div class="card-head">
+              <div class="card-title">Run log</div>
+              <div class="card-meta"><button class="btn btn-mini" id="btn-clear-logs">clear</button></div>
+            </div>
+            <pre class="log-feed" id="log-feed">Waiting for output…</pre>
+          </div>
+
+          <div class="card card-span-4 card-hysteresis" id="hysteresis-card" hidden>
+            <div class="card-head">
+              <div class="card-title">Hysteresis phases</div>
+              <div class="card-meta" id="hysteresis-regime">—</div>
+            </div>
+            <div class="hysteresis-grid">
+              <div class="phase-box" data-phase="base">
+                <div class="phase-head">
+                  <span class="phase-dot"></span>
+                  <span class="phase-name">BASE</span>
+                  <span class="phase-status" id="phase-status-base">pending</span>
+                </div>
+                <pre class="phase-output" id="phase-output-base">—</pre>
+              </div>
+              <div class="phase-box" data-phase="perturb">
+                <div class="phase-head">
+                  <span class="phase-dot"></span>
+                  <span class="phase-name">PERTURB</span>
+                  <span class="phase-status" id="phase-status-perturb">pending</span>
+                </div>
+                <pre class="phase-output" id="phase-output-perturb">—</pre>
+              </div>
+              <div class="phase-box" data-phase="reask">
+                <div class="phase-head">
+                  <span class="phase-dot"></span>
+                  <span class="phase-name">REASK</span>
+                  <span class="phase-status" id="phase-status-reask">pending</span>
+                </div>
+                <pre class="phase-output" id="phase-output-reask">—</pre>
+              </div>
+            </div>
+            <div class="chart" id="chart-hysteresis-metrics"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ARCHIVE VIEW -->
+      <section class="view view-archive" data-view="archive">
+        <header class="view-head">
+          <div class="view-head-row">
+            <div>
+              <h1>Run archive</h1>
+              <p class="view-sub"><span id="archive-count">—</span> runs in <code>runs/</code>. Click a card to open · check box to add to compare</p>
+            </div>
+            <div class="archive-filter">
+              <button class="filter-chip is-active" data-filter="all">all</button>
+              <button class="filter-chip" data-filter="observe">observe</button>
+              <button class="filter-chip" data-filter="hysteresis">hysteresis</button>
+              <button class="filter-chip" data-filter="stress">stress</button>
+              <button class="filter-chip" data-filter="control">control</button>
+              <button class="filter-chip" data-filter="sweep">sweep</button>
+              <button class="btn btn-mini btn-refresh" id="btn-refresh-archive">refresh</button>
+              <button class="btn btn-mini" id="btn-clear-selection" hidden>clear selection</button>
+              <button class="btn btn-mini btn-compare" id="btn-goto-compare" hidden>compare <span id="compare-count">0</span> →</button>
+            </div>
+          </div>
+        </header>
+
+        <div class="archive-grid" id="archive-grid"></div>
+
+        <div class="run-detail" id="run-detail" hidden>
+          <button class="btn btn-mini" id="btn-close-detail">← back</button>
+          <div id="run-detail-body"></div>
+        </div>
+      </section>
+
+      <!-- COMPARE VIEW -->
+      <section class="view view-compare" data-view="compare">
+        <header class="view-head">
+          <div class="view-head-row">
+            <div>
+              <h1>Compare runs</h1>
+              <p class="view-sub">Overlay trajectories from runs selected in the Archive tab</p>
+            </div>
+            <div>
+              <button class="btn btn-mini" id="btn-compare-clear">clear</button>
+            </div>
+          </div>
+        </header>
+
+        <div id="compare-empty" class="empty-state">
+          No runs selected — go to Archive and tick a few cards.
+        </div>
+
+        <div id="compare-body" hidden>
+          <div class="compare-legend" id="compare-legend"></div>
+
+          <div class="detail-section">
+            <div class="detail-section-title">Divergence vs. token position</div>
+            <div id="compare-chart-divergence" class="detail-chart"></div>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-section-title">Spectral entropy (trajectory FFT)</div>
+            <div id="compare-chart-entropy" class="detail-chart"></div>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-section-title">Hidden-state norm</div>
+            <div id="compare-chart-hidden" class="detail-chart"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

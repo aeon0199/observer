@@ -4,6 +4,14 @@ import argparse
 
 from runtime_lab.config.schemas import ControlConfig, DiagnosticsConfig
 from runtime_lab.control.adaptive_runner import run_control_experiment
+from ._common import (
+    add_probe_layers_arg,
+    add_sampling_args,
+    add_seed_sweep_arg,
+    parse_seeds,
+    resolve_probe_layers,
+)
+from ._sweep import run_sweep
 
 
 def add_control_args(parser: argparse.ArgumentParser) -> None:
@@ -34,9 +42,12 @@ def add_control_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sae-feature-idx", type=int, default=0)
     parser.add_argument("--sae-strength", type=float, default=5.0)
     parser.add_argument("--sae-no-normalize", action="store_true")
+    add_probe_layers_arg(parser)
+    add_sampling_args(parser)
+    add_seed_sweep_arg(parser)
 
 
-def run_from_args(args) -> None:
+def _run_one(args, seed: int):
     cfg = ControlConfig(
         prompt=args.prompt,
         model_key=args.model,
@@ -44,7 +55,7 @@ def run_from_args(args) -> None:
         backend=args.backend,
         nnsight_remote=args.nnsight_remote,
         nnsight_device=args.nnsight_device,
-        seed=args.seed,
+        seed=seed,
         measure_layer=args.measure_layer,
         act_layer=args.act_layer,
         intervention_type=args.type,
@@ -56,12 +67,16 @@ def run_from_args(args) -> None:
         scale_crit=args.scale_crit,
         hold_warn=args.hold_warn,
         hold_crit=args.hold_crit,
+        temperature=float(getattr(args, "temperature", 0.0)),
+        top_p=float(getattr(args, "top_p", 1.0)),
+        top_k=int(getattr(args, "top_k", 0)),
     )
 
-    diag_cfg = DiagnosticsConfig(
-        enabled=True,
-        probe_layers=[int(args.measure_layer), -1],
-    )
+    probe_layers = resolve_probe_layers(args.probe_layers, None)
+    if int(args.measure_layer) not in probe_layers:
+        probe_layers = [int(args.measure_layer), *probe_layers]
+
+    diag_cfg = DiagnosticsConfig(enabled=True, probe_layers=probe_layers)
 
     intervention_kwargs = {}
     if args.type == "sae":
@@ -77,11 +92,31 @@ def run_from_args(args) -> None:
             "name": f"sae_f{int(args.sae_feature_idx)}_s{float(args.sae_strength):.2f}",
         }
 
-    run_control_experiment(
+    return run_control_experiment(
         config=cfg,
         registry_path=args.registry_path,
         runs_dir=args.runs_dir,
         diagnostics_config=diag_cfg,
         intervention_kwargs=intervention_kwargs,
         generate_dashboard_html=not args.no_dashboard,
+    )
+
+
+def run_from_args(args) -> None:
+    seeds = parse_seeds(getattr(args, "seeds", None))
+    if not seeds:
+        _run_one(args, int(args.seed))
+        return
+    run_sweep(
+        mode="control",
+        seeds=seeds,
+        runs_dir=args.runs_dir,
+        run_once=lambda s: _run_one(args, s),
+        describe={
+            "prompt": args.prompt,
+            "model": args.model,
+            "measure_layer": int(args.measure_layer),
+            "act_layer": int(args.act_layer),
+            "shadow": bool(args.shadow),
+        },
     )

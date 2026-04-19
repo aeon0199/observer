@@ -1,6 +1,12 @@
 {
-  "default_model": "gpt2",
+  "default_model": "qwen3-1.7b",
   "models": {
+    "qwen3-1.7b": {
+      "hf_id": "Qwen/Qwen3-1.7B"
+    },
+    "qwen3-4b": {
+      "hf_id": "Qwen/Qwen3-4B"
+    },
     "qwen2.5-3b-instruct": {
       "hf_id": "Qwen/Qwen2.5-3B-Instruct"
     },

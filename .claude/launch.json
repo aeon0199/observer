@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Observer Console",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["scripts/observer_console.py", "--no-open", "--port", "8899"],
+      "port": 8899
+    },
+    {
+      "name": "Runtime Lab Dashboard (legacy)",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["scripts/runtime_lab_dashboard.py", "--no-open-browser", "--port", "8787"],
+      "port": 8787
+    }
+  ]
+}

@@ -62,6 +62,9 @@ def run_observe_experiment(
         intervention=None,
         probe_layers=diag_cfg.probe_layers,
         mode="observe",
+        temperature=float(getattr(config, "temperature", 0.0)),
+        top_p=float(getattr(config, "top_p", 1.0)),
+        top_k=int(getattr(config, "top_k", 0)),
     )
 
     run_config = {
@@ -72,6 +75,11 @@ def run_observe_experiment(
         "backend_meta": dict(backend_result.backend_meta),
         "max_new_tokens": int(config.max_new_tokens),
         "seed": int(config.seed) if config.seed is not None else None,
+        "temperature": float(getattr(config, "temperature", 0.0)),
+        "top_p": float(getattr(config, "top_p", 1.0)),
+        "top_k": int(getattr(config, "top_k", 0)),
+        "probe_layers_resolved": list(diag_cfg.probe_layers),
+        "num_layers": int(engine.num_layers),
     }
     cfg_hash = hash_config(run_config)
 
@@ -166,6 +174,12 @@ def run_observe_experiment(
             "config_path": str(config_path),
         },
     }
+
+    try:
+        from runtime_lab.core.advisory import analyze as _analyze_advisory
+        summary["advisory"] = _analyze_advisory("observe", summary)
+    except Exception as e:
+        summary["advisory"] = {"error": f"advisory failed: {e}"}
 
     save_json(str(summary_path), summary)
     return summary

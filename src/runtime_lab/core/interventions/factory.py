@@ -18,6 +18,7 @@ def build_intervention(kind: str, **kwargs: Any):
         return AdditiveIntervention(
             magnitude=float(kwargs.get("magnitude", 1.0)),
             seed=int(kwargs.get("seed", 42)),
+            relative=bool(kwargs.get("relative", True)),
         )
 
     if kind == "projection":

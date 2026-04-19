@@ -14,6 +14,7 @@ from runtime_lab.core.io.artifacts import ensure_dir
 from runtime_lab.core.io.hashing import hash_config
 from runtime_lab.core.io.json import save_json
 from runtime_lab.core.runtime.engine import RuntimeEngine
+from runtime_lab.core.sampling import logit_kl, logit_jensen_shannon, sample_token_id
 from runtime_lab.core.trajectory.comparison import TrajectoryComparison
 from runtime_lab.core.trajectory.state import TokenState, Trajectory, compute_entropy, compute_top1
 from .seed_cache import SeedCache, build_seed_cache
@@ -50,7 +51,9 @@ def _trajectory_from_seed_cache(
     intervention_end: int,
     model_id: str,
     diagnostics_manager: Optional[DiagnosticsManager] = None,
+    sampling_params: Optional[Dict[str, Any]] = None,
 ) -> tuple[Trajectory, str]:
+    sampling_params = sampling_params or {}
     trajectory = Trajectory(
         prompt=prompt,
         model_id=model_id,
@@ -73,6 +76,9 @@ def _trajectory_from_seed_cache(
         intervention=intervention,
         probe_layers=(diagnostics_manager.probe_layers if diagnostics_manager is not None else []),
         mode="stress",
+        temperature=float(sampling_params.get("temperature", 0.0)),
+        top_p=float(sampling_params.get("top_p", 1.0)),
+        top_k=int(sampling_params.get("top_k", 0)),
     )
 
     try:
@@ -93,7 +99,10 @@ def _trajectory_from_seed_cache(
 
         trajectory._logits.append(logits0.to(dtype=torch.float16))
 
-        next_token_id = int(logits0.argmax(dim=-1).item())
+        next_token_id = sample_token_id(
+            logits0, float(sampling_params.get("temperature", 0.0)),
+            float(sampling_params.get("top_p", 1.0)), int(sampling_params.get("top_k", 0)),
+        )
         entropy = compute_entropy(logits0)
         top1_prob, top1_token = compute_top1(logits0)
 
@@ -205,10 +214,14 @@ def run_stress_experiment(
         "intervention_layer": int(config.intervention_layer),
         "intervention_type": str(config.intervention_type),
         "intervention_magnitude": float(config.intervention_magnitude),
+        "intervention_magnitude_relative": bool(getattr(config, "intervention_magnitude_relative", True)),
         "intervention_start": int(config.intervention_start),
         "intervention_duration": int(config.intervention_duration),
         "seed": int(config.seed) if config.seed is not None else None,
         "with_diagnostics": bool(config.with_diagnostics),
+        "temperature": float(getattr(config, "temperature", 0.0)),
+        "top_p": float(getattr(config, "top_p", 1.0)),
+        "top_k": int(getattr(config, "top_k", 0)),
     }
 
     cfg_hash = hash_config(run_config)
@@ -245,9 +258,16 @@ def run_stress_experiment(
     intervention = build_intervention(
         config.intervention_type,
         magnitude=config.intervention_magnitude,
+        relative=bool(getattr(config, "intervention_magnitude_relative", True)),
         seed=(config.seed or 42),
         **(intervention_kwargs or {}),
     )
+
+    sampling_params = {
+        "temperature": float(getattr(config, "temperature", 0.0)),
+        "top_p": float(getattr(config, "top_p", 1.0)),
+        "top_k": int(getattr(config, "top_k", 0)),
+    }
 
     if config.seed is not None:
         _set_deterministic_state(int(config.seed))
@@ -265,6 +285,7 @@ def run_stress_experiment(
         intervention_end=-1,
         model_id=model_id,
         diagnostics_manager=baseline_diag,
+        sampling_params=sampling_params,
     )
 
     if config.seed is not None:
@@ -283,6 +304,7 @@ def run_stress_experiment(
         intervention_end=int(intervention_end),
         model_id=model_id,
         diagnostics_manager=intervention_diag,
+        sampling_params=sampling_params,
     )
 
     comparison = TrajectoryComparison(
@@ -290,6 +312,35 @@ def run_stress_experiment(
         intervention=intervention_trajectory,
     )
     comparison.compute_metrics()
+
+    # Per-step logit-KL: continuous measure of how much the intervention moved
+    # the model's decision distribution, even when argmax is unchanged.
+    logit_kl_series: list[float] = []
+    logit_js_series: list[float] = []
+    try:
+        base_logits = baseline_trajectory._logits  # list[Tensor], len = T
+        intr_logits = intervention_trajectory._logits
+        T = min(len(base_logits), len(intr_logits))
+        for i in range(T):
+            try:
+                kl = logit_kl(base_logits[i], intr_logits[i])
+                js = logit_jensen_shannon(base_logits[i], intr_logits[i])
+            except Exception:
+                kl = float("nan"); js = float("nan")
+            logit_kl_series.append(float(kl))
+            logit_js_series.append(float(js))
+    except Exception:
+        pass
+
+    def _mean_over(series: list[float], start: int, end: int) -> float:
+        sub = [x for x in series[start:end] if x == x]  # drop NaN
+        return float(sum(sub) / len(sub)) if sub else 0.0
+
+    during_start = int(config.intervention_start)
+    during_end = int(intervention_end)
+    logit_kl_mean = float(sum(logit_kl_series) / len(logit_kl_series)) if logit_kl_series else 0.0
+    logit_kl_during = _mean_over(logit_kl_series, during_start, during_end)
+    logit_kl_after = _mean_over(logit_kl_series, during_end, len(logit_kl_series))
 
     if abs(comparison.deviation_during) < 1e-9 and abs(comparison.final_distance) < 1e-9:
         regime = "NO_EFFECT"
@@ -328,6 +379,13 @@ def run_stress_experiment(
             "first_token_divergence": comparison.first_token_divergence,
             "regime": regime,
             "summary": comparison.summary,
+            # Logit-level distribution shifts — continuous measure of
+            # intervention effect even when greedy argmax is unchanged.
+            "logit_kl_mean": float(logit_kl_mean),
+            "logit_kl_mean_during": float(logit_kl_during),
+            "logit_kl_mean_after": float(logit_kl_after),
+            "logit_kl_series": logit_kl_series,
+            "logit_js_series": logit_js_series,
         },
         "trajectories": comparison.to_json(),
         "artifacts": {
@@ -344,6 +402,28 @@ def run_stress_experiment(
     with open(run_dir / "intervention_output.txt", "w", encoding="utf-8") as f:
         f.write(intervention_text)
 
+    try:
+        from runtime_lab.core.advisory import analyze as _analyze_advisory
+        results["advisory"] = _analyze_advisory("stress", results)
+    except Exception as e:
+        results["advisory"] = {"error": f"advisory failed: {e}"}
+
     save_json(str(run_dir / "results.json"), results)
+
+    # Also write a slim summary.json so the dashboard's summarize_run() finds
+    # model/device + headline + advisory without opening results.json.
+    summary = {
+        "config_hash": cfg_hash,
+        "mode": "stress",
+        "run_dir": str(run_dir),
+        "model_id": model_id,
+        "backend": backend_result.backend,
+        "runtime": results["runtime"],
+        "metrics": results["metrics"],
+        "advisory": results["advisory"],
+        "artifacts": results["artifacts"],
+        "config": {"config": run_config},  # match observe's nested shape
+    }
+    save_json(str(run_dir / "summary.json"), summary)
 
     return results

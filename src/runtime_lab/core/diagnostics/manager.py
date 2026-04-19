@@ -7,7 +7,7 @@ import torch
 from runtime_lab.config.schemas import DiagnosticsConfig
 from .layer_probe import LayerProbe, LayerProbeConfig
 from .predictor import DivergencePredictor
-from .spectral import spectral_energy_metrics
+from .spectral import SpectralTrajectoryProbe, SpectralTrajectoryConfig
 from .windowed_svd import WindowedSVDProbe, WindowedSVDProbeConfig
 
 
@@ -49,6 +49,7 @@ class DiagnosticsManager:
         self.predictor = None
         self.layer_probe = None
         self.svd_probe = None
+        self.spectral_probe = None
 
         if not self.enabled:
             return
@@ -63,6 +64,12 @@ class DiagnosticsManager:
                 WindowedSVDProbeConfig(
                     window_size=self.config.svd_window,
                     top_k=self.config.svd_top_k,
+                )
+            )
+            self.spectral_probe = SpectralTrajectoryProbe(
+                SpectralTrajectoryConfig(
+                    window_size=self.config.spectral_window,
+                    n_bands=self.config.spectral_bands,
                 )
             )
             if self.probe_layers:
@@ -85,6 +92,8 @@ class DiagnosticsManager:
             self.layer_probe.reset()
         if self.svd_probe is not None:
             self.svd_probe.reset()
+        if self.spectral_probe is not None:
+            self.spectral_probe.reset()
 
     def step(
         self,
@@ -110,7 +119,10 @@ class DiagnosticsManager:
             health["issues"].append({"issue": "predictor_exception", "message": str(e)})
 
         try:
-            out["spectral"] = spectral_energy_metrics(hidden)
+            if self.spectral_probe is not None:
+                out["spectral"] = self.spectral_probe.step(hidden)
+            else:
+                out["spectral"] = {"disabled": True}
         except Exception as e:
             out["spectral_error"] = str(e)
             health["degraded"] = True
