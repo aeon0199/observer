@@ -44,9 +44,22 @@ Last updated: **2026-04-19** · Active agent: Claude Opus 4.7 (1M context) · Pr
 - **Program structure**: three mapping questions, Q1–Q3 in §3. Each has a crisp stop condition so the work terminates cleanly.
 - **Controller status**: **paused**, not dead. §4 defines the evidence that would bring controller research back to active status.
 - **Instrument status**: fully operational. Warm daemon, sampling, seed sweeps, drift-opposing actuation, decoupled measure/act layers, per-step diagnostics — all verified and working (see RESEARCH_CONTROLLER.md TD1, §F17–F29).
-- **Next recommended action**: **M1.1 — offline branchpoint analysis on existing data.** We have ~150 control runs in `runs/` with shadow/active pairs. Before running any new experiments, analyze those offline to characterize which token positions flipped vs. which didn't. Zero daemon time, might answer most of Q1 from existing evidence.
+- **Next recommended action**: **M1.2 — log top-2 logit margin and per-step logit entropy in control events.** M1.1 produced an honest within-architecture AUROC of 0.82 (passes) but cross-architecture AUROC of 0.77 (fails). Available features leak architecture identity; the architecture-invariant feature that directly measures argmax-margin (top-2 logit margin) isn't logged. Code change: ~15 lines in `adaptive_runner.py` + `observe/runner.py` to add `top2_margin` and `logit_entropy` to the per-step event dict. Owner: Codex per our division. Then rerun `scripts/analyze_branchpoints.py` with the same cross-model slice and see if AUROC clears 0.80.
 
 ---
+
+## 2a. Mapping-program findings
+
+- **F30** — **(M1.1 offline branchpoint analysis) Q1 partially answered: within-architecture flippability is predictable from hidden-state geometry, but cross-architecture generalization fails the stop bar.** Using existing control runs (~115 in `runs/`) with pair-level train/test split and shadow-features-only (after fixing a circular-feature leak in Codex's initial smoke test), held-out AUROCs:
+  - Full archive, mixed variants (including random-direction that tautologically never flips): **0.94** — inflated
+  - Qwen3-1.7B only, opposing, sourdough, L=-1: **0.82** — passes, but single-model
+  - Qwen3-1.7B + TinyLlama, opposing, sourdough, L=-1: **0.77** — FAILS the 0.80 bar
+  - Top predictive features (same across all three tests): `spectral.permutation_change` (trajectory-axis FFT response), `spectral.total_power` (higher = less flippable), `layer_stiffness.-1.elasticity` (low final-layer velocity = flippable), `svd.top1_energy_frac` (concentrated trajectory = flippable), `step_idx` (later tokens more flippable).
+  - **Interpretation**: within a single architecture, features of the clean trajectory predict which tokens will flip under perturbation. Across architectures, these features leak architecture identity (hidden-state norms, stiffness scales differ between Qwen3 and TinyLlama) and don't transfer. The mechanism is general (F25 Part A) but the predictive signal in available features is per-architecture.
+  - **What's missing**: top-2 logit margin and per-step logit entropy — both architecture-invariant and directly measure argmax-margin (the mechanistic definition of flippability). Neither is logged in current events.jsonl.
+  - **Next (M1.2)**: code change to log those two features in control and observe event writers. Rerun analyzer. Expected to close the cross-model gap if logit-margin is indeed the right feature.
+  - Analyzer: `scripts/analyze_branchpoints.py`. Artifacts on branch `codex/runtime-lab-ad` commit `1ec2c14`.
+  - Confidence: **medium/high** on same-architecture claim, **pending** on cross-architecture until M1.2.
 
 ## 2. Carry-over facts (established in controller arc)
 
@@ -146,7 +159,12 @@ If any two land, a controller redesign experiment is warranted. If none land dur
 
 Order: do M1.1 first (free, might answer Q1 from existing data). Then M2.1 and M3.1 in parallel (low cost, leverage data). Only move to M1.2 / M2.2 / M3.2 if earlier results don't settle the question.
 
-### [ ] M1.1 — Offline branchpoint analysis from existing control runs
+### [~] M1.1 — Offline branchpoint analysis from existing control runs *(partial pass, 2026-04-19)*
+- **Outcome**: analyzer at `scripts/analyze_branchpoints.py` (Codex wrote, Claude fixed a circular-feature leak). Honest cross-model AUROC 0.77 (fails 0.80 bar); same-model AUROC 0.82 (passes). See F30.
+- **Status**: complete on existing data. Gap identified: need top-2 logit margin + per-step logit entropy as architecture-invariant features. Queued as M1.2.
+- **Archived task entry** (preserving original design for context):
+
+### [ ] M1.1 — Offline branchpoint analysis from existing control runs (original task)
 - **Question**: From our ~150 existing control runs, can we characterize which step-level features predict whether a token gets flipped?
 - **Design**:
   - Iterate over every shadow/active pair we have in `runs/`
@@ -161,11 +179,29 @@ Order: do M1.1 first (free, might answer Q1 from existing data). Then M2.1 and M
 - **Outcome**: _(filled when complete)_
 - **Follow-ups**: _(filled when complete)_
 
-### [ ] M1.2 — Targeted flippability sweep (only if M1.1 inconclusive)
-- **Question**: If existing data doesn't have enough signal for Q1's predictor, run targeted stress runs at L=-1 with detailed per-token logging (top-2 margin, full logit distribution).
-- **Design**: 10 prompts × 3 magnitudes × 3 seeds = 90 stress runs.
-- **Expected runtime**: ~45 min with daemon.
-- **Blocked on**: M1.1 being insufficient.
+### [ ] M1.2 — Add logit-margin / logit-entropy to control + observe events
+- **Status**: queued 2026-04-19. Owner: Codex per code-change division.
+- **Question**: Does adding architecture-invariant logit-level features close the cross-model gap that M1.1 left open (same-model AUROC 0.82, cross-model 0.77)?
+- **Code change** (Codex):
+  - In `control/adaptive_runner.py` and `observe/runner.py`, after computing `logits`, extract:
+    - `top1_logit = float(logits.max().item())`
+    - `top2_logit = float(logits.topk(2).values[-1].item())`
+    - `top2_margin = top1_logit - top2_logit`
+    - `logit_entropy = -(torch.softmax(logits, dim=-1) * torch.log_softmax(logits, dim=-1)).sum().item()`
+  - Write these four floats into the per-step event dict alongside existing fields.
+  - Keep backward-compat: don't break old event readers — new fields are additive.
+  - ~15 lines per runner, ~30 total.
+- **Experiment once code lands** (Claude):
+  - Rerun a small suite (sourdough, 5 seeds, both Qwen3-1.7B and TinyLlama, opposing+anchor, mag=0.3/0.6). ~10 runs.
+  - Re-run `scripts/analyze_branchpoints.py` on the new events.jsonl — top-2 margin should be the dominant predictor if the theory is right.
+  - **Stop condition** (Q1): cross-model AUROC ≥ 0.80.
+- **Expected payoff**: either Q1 fully answered with a clean architecture-invariant predictor, OR clean evidence that branchpoint flippability has real architecture-specific components beyond just logit margin (also a finding).
+
+### [ ] M1.3 — Targeted flippability sweep (only if M1.2 insufficient)
+- **Question**: If even with logit features the cross-model AUROC doesn't clear 0.80, run a larger targeted suite to see whether more data helps or the ceiling is structural.
+- **Design**: 10 prompts × 3 magnitudes × 3 seeds × 2 models = 180 runs.
+- **Expected runtime**: ~1 hour with daemon.
+- **Blocked on**: M1.2 being insufficient.
 
 ### [ ] M2.1 — Per-layer propagation measurement from existing data
 - **Question**: For the stress runs we already have at varying `intervention_layer`, extract the delta L2 norm at each probe_layer downstream of the injection. Build the propagation curve from existing events.jsonl layer_stiffness fields.
@@ -199,6 +235,7 @@ Order: do M1.1 first (free, might answer Q1 from existing data). Then M2.1 and M
 ## 6. Sessions log (Mapping phase)
 
 - **2026-04-19 · Program defined.** Pivoted from controller-focused to mapping-focused. Three questions (Q1 branchpoint geometry, Q2 propagation, Q3 basin structure) with stop conditions. Controller-return criteria specified. Next: M1.1.
+- **2026-04-19 · M1.1 ran, partial pass.** Codex wrote `scripts/analyze_branchpoints.py`. Claude caught + fixed a circular-feature leak (features from active events included intervention_applied, scale_used, etc. — tautological). With honest shadow-features, held-out AUROC 0.82 same-model, 0.77 cross-model. F30 added. M1.1 can't fully close Q1 without architecture-invariant features; M1.2 (logit-margin + logit-entropy logging) is queued as next code task for Codex.
 
 _(For sessions covering the controller arc 2026-02 through 2026-04-19, see [RESEARCH_CONTROLLER.md](RESEARCH_CONTROLLER.md) §5.)_
 
