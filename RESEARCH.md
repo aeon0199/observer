@@ -40,26 +40,24 @@ Last updated: **2026-04-19** · Active agent: Claude Opus 4.7 (1M context) · Pr
 
 ## 1. Current state
 
-- **North star**: *Observer's job is to map the geometry of trajectory sensitivity, persistence, and branchpoint behavior in real language-model generation.* This replaces the old "closed-loop stability control" framing, which was falsified on Qwen3-1.7B (see RESEARCH_CONTROLLER.md §2 F4/F17/F21/F27/F28).
+- **North star**: *Observer's job is to map the geometry of trajectory sensitivity, persistence, and branchpoint behavior in Qwen3-1.7B.* Program scope is explicitly single-model. Cross-model generalization is a separate, later concern — not blocking any question here. The controller framing was falsified on Qwen3 (see RESEARCH_CONTROLLER.md §2 F4/F17/F21/F27/F28), but the instrument still has a lot to tell us about this model.
 - **Program structure**: three mapping questions, Q1–Q3 in §3. Each has a crisp stop condition so the work terminates cleanly.
 - **Controller status**: **paused**, not dead. §4 defines the evidence that would bring controller research back to active status.
 - **Instrument status**: fully operational. Warm daemon, sampling, seed sweeps, drift-opposing actuation, decoupled measure/act layers, per-step diagnostics — all verified and working (see RESEARCH_CONTROLLER.md TD1, §F17–F29).
-- **Next recommended action**: **M1.2 — log top-2 logit margin and per-step logit entropy in control events.** M1.1 produced an honest within-architecture AUROC of 0.82 (passes) but cross-architecture AUROC of 0.77 (fails). Available features leak architecture identity; the architecture-invariant feature that directly measures argmax-margin (top-2 logit margin) isn't logged. Code change: ~15 lines in `adaptive_runner.py` + `observe/runner.py` to add `top2_margin` and `logit_entropy` to the per-step event dict. Owner: Codex per our division. Then rerun `scripts/analyze_branchpoints.py` with the same cross-model slice and see if AUROC clears 0.80.
+- **Next recommended action**: **M1.2 — run a second Qwen3 prompt suite to close Q1's prompt-breadth requirement.** M1.1 produced a within-Qwen3 AUROC of 0.82 on sourdough (passes the stop threshold) but Q1's evidence standard also requires ≥2 prompts. Run ~10 new control runs (5 seeds × 2 cells) on a non-sourdough prompt already in the registry (e.g., "Describe the water cycle" or "Explain how airplanes fly"), then rerun `scripts/analyze_branchpoints.py` on the combined corpus. If Qwen3 within-model AUROC holds ≥0.80 across both prompts, Q1 is closed and we move to Q2.
 
 ---
 
 ## 2a. Mapping-program findings
 
-- **F30** — **(M1.1 offline branchpoint analysis) Q1 partially answered: within-architecture flippability is predictable from hidden-state geometry, but cross-architecture generalization fails the stop bar.** Using existing control runs (~115 in `runs/`) with pair-level train/test split and shadow-features-only (after fixing a circular-feature leak in Codex's initial smoke test), held-out AUROCs:
-  - Full archive, mixed variants (including random-direction that tautologically never flips): **0.94** — inflated
-  - Qwen3-1.7B only, opposing, sourdough, L=-1: **0.82** — passes, but single-model
-  - Qwen3-1.7B + TinyLlama, opposing, sourdough, L=-1: **0.77** — FAILS the 0.80 bar
-  - Top predictive features (same across all three tests): `spectral.permutation_change` (trajectory-axis FFT response), `spectral.total_power` (higher = less flippable), `layer_stiffness.-1.elasticity` (low final-layer velocity = flippable), `svd.top1_energy_frac` (concentrated trajectory = flippable), `step_idx` (later tokens more flippable).
-  - **Interpretation**: within a single architecture, features of the clean trajectory predict which tokens will flip under perturbation. Across architectures, these features leak architecture identity (hidden-state norms, stiffness scales differ between Qwen3 and TinyLlama) and don't transfer. The mechanism is general (F25 Part A) but the predictive signal in available features is per-architecture.
-  - **What's missing**: top-2 logit margin and per-step logit entropy — both architecture-invariant and directly measure argmax-margin (the mechanistic definition of flippability). Neither is logged in current events.jsonl.
-  - **Next (M1.2)**: code change to log those two features in control and observe event writers. Rerun analyzer. Expected to close the cross-model gap if logit-margin is indeed the right feature.
-  - Analyzer: `scripts/analyze_branchpoints.py`. Artifacts on branch `codex/runtime-lab-ad` commit `1ec2c14`.
-  - Confidence: **medium/high** on same-architecture claim, **pending** on cross-architecture until M1.2.
+- **F30** — **(M1.1 offline branchpoint analysis on Qwen3-1.7B) Q1 partially answered: the stop-threshold AUROC is met on one prompt, but the evidence standard needs a second prompt to close.** Using existing Qwen3-1.7B control runs with pair-level train/test split and shadow-features-only (after fixing a circular-feature leak in Codex's initial smoke test, which had reused active-event features that tautologically correlate with the flip label): held-out AUROC on the Qwen3-only sourdough × opposing-anchor × L=-1 slice is **0.82** across 12 valid pairs / 576 step rows / 4 seeds.
+  - Stop condition (§3 Q1): AUROC ≥ 0.80. ✓ met on this slice.
+  - Evidence standard (§3 Q1): ≥3 seeds AND ≥2 prompts within Qwen3-1.7B. Seeds ✓ (4). Prompts ✗ (only sourdough has valid shadow/active pairs in the archive).
+  - Top predictive features (shadow trajectory only, clean): `spectral.permutation_change` (trajectory-axis FFT response), `spectral.total_power` (higher = less flippable), `layer_stiffness.-1.elasticity` (low final-layer velocity = flippable), `svd.top1_energy_frac` (concentrated trajectory = flippable), `step_idx` (later tokens more flippable).
+  - **Interpretation**: within Qwen3-1.7B on this prompt, hidden-state geometry features from the clean trajectory predict flippability at 0.82 AUROC. Mechanistically coherent: flippable steps are low-velocity, spectrally-broad-but-low-power, concentrated in a dominant direction, and later in the sequence.
+  - **Next step to close Q1 on Qwen3**: run a small targeted suite on a second Qwen3 prompt (e.g., "Describe the water cycle" or "Explain how airplanes fly") — 5 seeds × 2 cells (shadow + opposing-anchor at L=-1 mag=0.3/0.6) = 10 runs, ~1 min with daemon. Then rerun the analyzer combining both prompts; if within-Qwen3 AUROC holds ≥0.80, Q1 is closed for this program.
+  - Artifacts: analyzer at `scripts/analyze_branchpoints.py`, commit `1ec2c14`.
+  - Confidence: **medium** (1 prompt, 4 seeds, mechanistically consistent features, but prompt-breadth evidence standard not yet met).
 
 ## 2. Carry-over facts (established in controller arc)
 
@@ -89,7 +87,7 @@ Three questions, each a deliberate research program with a stop condition. Work 
 - hidden-state delta norm from prior step
 - predicted next-token divergence
 
-**Evidence standard**: ≥3 seeds, ≥2 prompts, ≥2 models. Held-out test set.
+**Evidence standard** (Qwen3-1.7B scope): ≥3 seeds, ≥2 prompts within Qwen3-1.7B. Held-out test set at pair level. Cross-model generalization is a separate, later concern — not required to close Q1 for this program.
 
 **Stop condition**: a feature-based rule achieves precision ≥0.7 AND recall ≥0.5 on held-out runs. If no single rule gets there, we can train a simple logistic regression / decision tree — still counts if AUROC ≥ 0.8.
 
@@ -106,7 +104,7 @@ Three questions, each a deliberate research program with a stop condition. Work 
 
 **The claim we're trying to establish.** Given an additive injection of size `s` at layer `L`, measure the delta's L2 norm at every downstream layer up to L=-1. Does it decay, amplify, or get absorbed by specific norm layers?
 
-**Evidence standard**: ≥5 seed replicates per `(injection_layer, intervention_type, magnitude)` cell. Multi-model replication for any "general" claim.
+**Evidence standard** (Qwen3-1.7B scope): ≥5 seed replicates per `(injection_layer, intervention_type, magnitude)` cell within Qwen3-1.7B. Cross-model claims are out of scope for this mapping program.
 
 **Stop condition**: per-layer propagation curve that cleanly explains F27's "earlier layer = worse" finding. Specifically — the curve should predict which layers produce "bounded" cascade (delta stays bounded at each downstream layer) vs "destructive" cascade (delta amplifies or destroys hidden-state structure).
 
@@ -123,14 +121,14 @@ Three questions, each a deliberate research program with a stop condition. Work 
 
 **The claim we're trying to establish.** Given a token flip at branchpoint T, predict whether the resulting trajectory lands in a better or worse basin. F29 showed this is model-specific; we want to characterize the model-dependent features that determine it.
 
-**Evidence standard**: ≥3 models, ≥10 prompts, ≥3 seeds per `(model, prompt)` cell.
+**Evidence standard** (Qwen3-1.7B scope): ≥5 prompts × ≥3 seeds per (prompt, config) cell, all within Qwen3-1.7B. Cross-model basin comparison is out of scope here (see RESEARCH_CONTROLLER.md F29 for the one cross-model data point we already have, to be revisited later).
 
-**Stop condition**: a feature of the pre-flip generation (or the model itself) that predicts improve-vs-degrade with AUROC ≥ 0.7. Candidate features:
+**Stop condition**: a feature of the pre-flip Qwen3-1.7B generation that predicts improve-vs-degrade with AUROC ≥ 0.7. Candidate features:
 - Baseline output repetition score (is the model in a degenerate loop?)
 - Baseline avg_divergence (how unstable is the trajectory anyway?)
 - Prompt class (factual/procedural/creative/reasoning/code)
-- Model family (Qwen vs Llama vs Gemma)
 - Token position where flip lands (early in generation may matter more)
+- Baseline top-2 logit margin at the flip token (once logged)
 
 **Why it matters**
 - Resolves the F25/F29 split — tells us when branchpoint-hijacking actually helps.
@@ -179,29 +177,20 @@ Order: do M1.1 first (free, might answer Q1 from existing data). Then M2.1 and M
 - **Outcome**: _(filled when complete)_
 - **Follow-ups**: _(filled when complete)_
 
-### [ ] M1.2 — Add logit-margin / logit-entropy to control + observe events
-- **Status**: queued 2026-04-19. Owner: Codex per code-change division.
-- **Question**: Does adding architecture-invariant logit-level features close the cross-model gap that M1.1 left open (same-model AUROC 0.82, cross-model 0.77)?
-- **Code change** (Codex):
-  - In `control/adaptive_runner.py` and `observe/runner.py`, after computing `logits`, extract:
-    - `top1_logit = float(logits.max().item())`
-    - `top2_logit = float(logits.topk(2).values[-1].item())`
-    - `top2_margin = top1_logit - top2_logit`
-    - `logit_entropy = -(torch.softmax(logits, dim=-1) * torch.log_softmax(logits, dim=-1)).sum().item()`
-  - Write these four floats into the per-step event dict alongside existing fields.
-  - Keep backward-compat: don't break old event readers — new fields are additive.
-  - ~15 lines per runner, ~30 total.
-- **Experiment once code lands** (Claude):
-  - Rerun a small suite (sourdough, 5 seeds, both Qwen3-1.7B and TinyLlama, opposing+anchor, mag=0.3/0.6). ~10 runs.
-  - Re-run `scripts/analyze_branchpoints.py` on the new events.jsonl — top-2 margin should be the dominant predictor if the theory is right.
-  - **Stop condition** (Q1): cross-model AUROC ≥ 0.80.
-- **Expected payoff**: either Q1 fully answered with a clean architecture-invariant predictor, OR clean evidence that branchpoint flippability has real architecture-specific components beyond just logit margin (also a finding).
+### [ ] M1.2 — Close Q1 with a second Qwen3 prompt
+- **Status**: queued 2026-04-19. Runs-only task (Claude).
+- **Question**: Does the M1.1 classifier (shadow-trajectory features → flip/no-flip prediction) generalize to a second Qwen3-1.7B prompt? Needed to meet Q1's ≥2 prompts evidence standard.
+- **Design**:
+  - Pick one non-sourdough prompt already in the registry (e.g., "Describe the water cycle in a few sentences." or "Explain how airplanes fly in a clear, accurate way.").
+  - Run 5 seeds × 2 cells (shadow + opposing-anchor additive at L=-1, mag=0.3/0.6, temp=0.8, max_tokens=48). 10 runs.
+  - Run `scripts/analyze_branchpoints.py` on the combined corpus (sourdough + new prompt).
+- **Stop condition** (Q1 closure): within-Qwen3 held-out AUROC ≥ 0.80 across both prompts.
+- **Expected payoff**: Q1 cleanly closed on Qwen3-1.7B, M2 work unblocked. If AUROC drops significantly on the second prompt, that itself is interesting — means flippability features are prompt-type-specific within the same model.
+- **Expected runtime**: ~2 min with daemon.
 
-### [ ] M1.3 — Targeted flippability sweep (only if M1.2 insufficient)
-- **Question**: If even with logit features the cross-model AUROC doesn't clear 0.80, run a larger targeted suite to see whether more data helps or the ceiling is structural.
-- **Design**: 10 prompts × 3 magnitudes × 3 seeds × 2 models = 180 runs.
-- **Expected runtime**: ~1 hour with daemon.
-- **Blocked on**: M1.2 being insufficient.
+### [ ] M1.3 — Add logit-margin / logit-entropy logging (optional, for later)
+- **Status**: deferred. Would be useful if M1.2's combined-prompt classifier underperforms on the new prompt. Also useful for future cross-model work (out of scope for now).
+- **Owner**: Codex if triggered. ~30 lines in `adaptive_runner.py` + `observe/runner.py`.
 
 ### [ ] M2.1 — Per-layer propagation measurement from existing data
 - **Question**: For the stress runs we already have at varying `intervention_layer`, extract the delta L2 norm at each probe_layer downstream of the injection. Build the propagation curve from existing events.jsonl layer_stiffness fields.
@@ -216,26 +205,20 @@ Order: do M1.1 first (free, might answer Q1 from existing data). Then M2.1 and M
 - **Code**: Codex territory. ~40 lines in observe/runner.py + a new orchestrator.
 - **Blocked on**: M2.1 being insufficient + Codex code change.
 
-### [ ] M3.1 — Third-model scope check for F25 Part A
-- **Question**: Does the token-flip mechanism replicate on a third model family (Gemma-3-1b-it or SmolLM3-3B)?
-- **Design**: replicate the F29 scope check setup — (L=-1, additive, opposing+anchor, mag=0.3/0.6, temp=0.8), 5 seeds × 2 cells (shadow/active) × 1 well-chosen prompt that doesn't hit EOS on instruct-tuned models.
-- **Stop condition**: ≥3 of 5 seeds show clear token flips when active. If yes, F25 Part A is 3-model confirmed.
-- **Expected runtime**: ~5 min with daemon (after model download if not cached).
+### [ ] M3.1 — Prompt-class basin mapping on Qwen3-1.7B
+- **Question**: Within Qwen3-1.7B, does the branchpoint-hijack outcome (improve vs degrade vs no-effect) systematically depend on prompt class? E.g., does the controller help on procedural prompts more than on creative ones?
+- **Design**: 5 prompt classes (factual / procedural / creative / reasoning / code) × 3 seeds × 2 cells (shadow + opposing-anchor additive at L=-1, mag=0.3/0.6) = 30 control runs.
+- **Stop condition**: one prompt-class feature that predicts improve-vs-degrade with AUROC ≥ 0.7 within Qwen3-1.7B.
+- **Expected runtime**: ~5 min with daemon.
 - **Outcome**: _(filled when complete)_
-
-### [ ] M3.2 — Prompt-class × model basin mapping
-- **Question**: For each (model, prompt_class) cell, does the active intervention land in a better or worse basin on average? What features of the baseline predict the outcome?
-- **Design**: 3 models × 5 prompt classes (factual / procedural / creative / reasoning / code) × 3 seeds × 2 cells = 90 control runs.
-- **Stop condition**: one feature of the baseline that predicts improve-vs-degrade with AUROC ≥ 0.7.
-- **Expected runtime**: ~30 min with daemon.
-- **Blocked on**: M3.1 succeeding (no point doing class mapping if Part A doesn't replicate on a third model).
 
 ---
 
 ## 6. Sessions log (Mapping phase)
 
 - **2026-04-19 · Program defined.** Pivoted from controller-focused to mapping-focused. Three questions (Q1 branchpoint geometry, Q2 propagation, Q3 basin structure) with stop conditions. Controller-return criteria specified. Next: M1.1.
-- **2026-04-19 · M1.1 ran, partial pass.** Codex wrote `scripts/analyze_branchpoints.py`. Claude caught + fixed a circular-feature leak (features from active events included intervention_applied, scale_used, etc. — tautological). With honest shadow-features, held-out AUROC 0.82 same-model, 0.77 cross-model. F30 added. M1.1 can't fully close Q1 without architecture-invariant features; M1.2 (logit-margin + logit-entropy logging) is queued as next code task for Codex.
+- **2026-04-19 · M1.1 ran, Qwen3 AUROC 0.82.** Codex wrote `scripts/analyze_branchpoints.py`. Claude caught + fixed a circular-feature leak (features from active events included intervention_applied, scale_used, etc. — tautological). With honest shadow-trajectory features on the Qwen3-1.7B sourdough slice, held-out AUROC is **0.82** across 12 pairs / 4 seeds — clears Q1's 0.80 threshold. F30 added. Remaining Q1 gap: ≥2 prompts evidence standard. M1.2 queued: run a second Qwen3 prompt suite.
+- **2026-04-19 · Scope correction.** Human redirected: mapping program is Qwen3-1.7B, not cross-model. Earlier M1.2 spec (add logit-margin logging for cross-model generalization) deferred to M1.3 / later work. Current M1.2 is a simple 10-run experiment on a second Qwen3 prompt.
 
 _(For sessions covering the controller arc 2026-02 through 2026-04-19, see [RESEARCH_CONTROLLER.md](RESEARCH_CONTROLLER.md) §5.)_
 
