@@ -186,11 +186,47 @@ def advise_hysteresis(summary: Dict[str, Any]) -> Advisory:
     drift = _safe_float(metrics.get("drift"))
     hysteresis = _safe_float(metrics.get("hysteresis"))
     recovery = _safe_float(metrics.get("recovery"))
+    did_not_propagate = bool(metrics.get("perturbation_did_not_propagate"))
 
     adv.observations.append(
         f"perturbation_mode={mode} regime={regime} drift={_fmt(drift)} "
         f"hysteresis={_fmt(hysteresis)} recovery={_fmt(recovery)}"
     )
+
+    # TD2 / F9: perturbation didn't propagate — recovery is undefined.
+    # This is NOT a regime finding; it's a failed experiment from a
+    # research POV. Tell the LLM to adjust params, not to interpret.
+    if did_not_propagate:
+        adv.flags.append("no-propagation")
+        adv.observations.append(
+            f"drift={_fmt(drift)} is below the propagation threshold "
+            f"({_fmt(_safe_float(metrics.get('drift_min_threshold')))}) — "
+            "the perturbation did not measurably reach the model's output "
+            "state. Recovery is undefined in this regime."
+        )
+        layer = cfg.get("noise_layer_resolved", cfg.get("noise_layer"))
+        mag = _safe_float(cfg.get("noise_magnitude"))
+        if mode == "noise":
+            adv.next_actions.append({
+                "label": "Raise magnitude — current perturbation was too small",
+                "params": {"noise_magnitude": (mag or 0.3) * 2},
+            })
+            if isinstance(layer, int) and layer not in (-1, 0) and layer < 22:
+                adv.next_actions.append({
+                    "label": "Try the peak-sensitivity layer (E1 found L27 for Qwen3-1.7B)",
+                    "params": {"noise_layer": -1},
+                })
+            adv.next_actions.append({
+                "label": "Longer perturbation window",
+                "params": {"noise_duration": max(16, int(cfg.get("noise_duration", 8)) * 2)},
+            })
+        adv.confidence = "high"
+        adv.summary_line = _fmt_summary(
+            mode=f"hysteresis:{mode}",
+            leads=[f"regime=no-propagation", f"drift={_fmt(drift)}"],
+            flags=adv.flags,
+        )
+        return adv
 
     # Detect a true no-op — base and perturb telemetry identical
     base = telemetry.get("base") or {}

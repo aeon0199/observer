@@ -617,16 +617,27 @@ def run_hysteresis_experiment(
 
     drift = _compute_component_distances(base.stats, perturb.stats)
     hysteresis = _compute_component_distances(base.stats, reask.stats)
-    recovery = 1.0 - (hysteresis["composite"] / (drift["composite"] + 1e-8))
 
-    if recovery > 0.8:
-        regime = "elastic"
-    elif recovery > 0.4:
-        regime = "partial"
-    elif recovery >= 0:
-        regime = "plastic"
+    # TD2 / F9 fix: recovery is CONCEPTUALLY UNDEFINED when the perturbation
+    # didn't propagate (drift ≈ 0). Reporting a numeric ratio in that case
+    # (the old `1 - H/(D+ε)` blows up to ±1000) mixes real recovery signal
+    # with measurement artifacts. Flag and skip.
+    DRIFT_MIN = 0.05
+    perturbation_did_not_propagate = bool(drift["composite"] < DRIFT_MIN)
+
+    if perturbation_did_not_propagate:
+        recovery = None
+        regime = "no-propagation"
     else:
-        regime = "runaway"
+        recovery = 1.0 - (hysteresis["composite"] / drift["composite"])
+        if recovery > 0.8:
+            regime = "elastic"
+        elif recovery > 0.4:
+            regime = "partial"
+        elif recovery >= 0:
+            regime = "plastic"
+        else:
+            regime = "runaway"
 
     drift_hidden = abs(base.stats["hidden_norm"] - perturb.stats["hidden_norm"])
     drift_entropy = abs(base.stats["entropy"] - perturb.stats["entropy"])
@@ -725,8 +736,10 @@ def run_hysteresis_experiment(
         "metrics": {
             "drift": float(drift["composite"]),
             "hysteresis": float(hysteresis["composite"]),
-            "recovery": float(recovery),
+            "recovery": (None if recovery is None else float(recovery)),
             "regime": regime,
+            "perturbation_did_not_propagate": bool(perturbation_did_not_propagate),
+            "drift_min_threshold": float(DRIFT_MIN),
             "components": {
                 "drift": drift,
                 "hysteresis": hysteresis,
