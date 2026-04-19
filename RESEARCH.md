@@ -34,14 +34,10 @@ Last updated: **2026-04-18** · Active agent: Claude Opus 4.7 (1M context)
 
 ## 1. Current state
 
-- **Active focus**: We now have a reproducible operating point: (L27, noise_magnitude=1.0, factual-prompt class, temp=0.8) produces drift=1.96±0.37 across 5 seeds (DSR=5.36). See F13. This unlocks legitimate controller work.
-- **Controller status**: **OFF HOLD**. F13 gives us the reference drift distribution to calibrate against. E8 (controller redesign) can now proceed at L27 with magnitude-calibrated thresholds.
-- **Capabilities snapshot**: observe, stress, hysteresis (prompt + noise modes), control (shadow + active), seed sweeps, multi-layer probing, logit-KL, semantic layer defaults, advisory generator, spectral trajectory probe, warm-model daemon (~16× speedup). All verified 2026-04-18.
-- **Next recommended action**: Three legitimate next experiments, in order of priority:
-  - **(a) E6 — intervention-type comparison at L27 at the calibrated magnitude.** Now that we know L27+mag=1.0 on additive gives reproducible drift, compare scaling/projection/additive at the same layer+magnitude. Needed before redesigning the controller (which uses scaling).
-  - **(b) E2 phase D — procedural prompt at mag=1.5 or 2.0.** See if procedural can also enter signal-dominated regime at larger magnitudes, or if it's fundamentally noisier.
-  - **(c) E8 — controller redesign** at L27 with scaling calibrated to produce ~1.96 drift (the F13 operating point). Intervention triggered when measured drift exceeds the F13 baseline envelope.
-  - Recommend **(a)** next — fastest, informs (c) directly.
+- **Active focus**: F13 gave us a reproducible drift operating point; E6 then established that **scaling interventions at L27 do literally nothing** (F17) — which explains F4's null controller result. **Additive is the controller's real knob.** Now the question is whether additive interventions triggered at the right time can reduce divergence.
+- **Controller status**: **unblocked for redesign (E8)**. Concrete spec: act_layer=-1 + intervention_type=additive + calibrated magnitude ≈ 0.5 (smaller than E6's 1.0 to avoid over-correction). Current CLI `control` mode only supports `scaling` and `sae` — E8 needs code work: wire `additive` into the control runner's intervention factory selection and add direction-inversion logic (subtract a fraction of measured drift direction instead of applying a random seeded direction).
+- **Capabilities snapshot**: observe, stress, hysteresis (prompt + noise modes), control (shadow + active, currently scaling/sae only), seed sweeps, multi-layer probing, logit-KL, semantic layer defaults, advisory generator, spectral trajectory probe, warm-model daemon (~16× speedup). All verified 2026-04-19.
+- **Next recommended action**: **E8 — controller redesign.** This is now a code task: (1) allow `control --type additive` to build an AdditiveIntervention with configured magnitude, (2) optionally add drift-direction inversion so the injected delta opposes the detected divergence, (3) re-run shadow vs active A/B with the new setup on the same sourdough prompt that exposed F4. Success criterion: active mode's avg_raw_div lower than shadow mode's by more than 1 stdev.
 
 ---
 
@@ -60,6 +56,11 @@ _What we've established, with evidence. Don't re-run these unless you suspect on
 - **F13** — **(E2 phase C, 30 runs at L27, mag ∈ {0.5, 0.7, 1.0}) Signal-dominated regime IS achievable.** At (L27, mag=1.0, factual prompt): drift mean=1.96, stdev=0.37, **DSR=5.36** (first crossing of stability threshold in the repo). 3/5 runs in "partial" regime, mean recovery=+0.001 — bounded near-elastic boundary. This is the first reproducible hysteresis signal the repo has produced. Confidence: **high** (n=5). **This is the result the framework was built for.**
 - **F14** — **(E2 phase C) Magnitude threshold for stability exists AND is prompt-dependent.** Factual DSR: 1.26 (mag=0.5) → 1.63 (0.7) → **5.36** (1.0) — crosses 2 between 0.7 and 1.0. Procedural DSR: 0.91 → 1.81 → 1.80 — plateaus around 1.8, doesn't cross 2 at mag=1.0. Either procedural generation is fundamentally noisier, or the threshold is >1.0. Confidence: **medium** (single prompt per class).
 - **F15** — **(E2 phase C) Recovery-vs-magnitude trend is prompt-specific.** Factual mean recovery: -0.39 → -0.19 → +0.00 (smoothly moves toward elastic with more perturbation — counterintuitive but consistent). Procedural: +0.13 → -0.20 → -0.13 (no trend). Factual's smooth trend is evidence that magnitude is the right control knob for at least some prompt classes.
+- **F17** — **(E6, 10 runs) Scaling intervention at L27 has ZERO effect.** `scaling@0.5` and `scaling@2.0` both produced `logit_kl_mean_during=0.0000` exactly AND `token_match_rate=1.000` across all 5 seeds each. The scaling factor is erased by the final RMSNorm before the LM head. **This is almost certainly why the controller (F4) didn't work** — its default `intervention_type=scaling` at `act_layer=-1` was a no-op. Confidence: **very high**.
+- **F18** — **(E6) Additive is the right intervention class at L27.** Additive@1.0: `logit_kl_mean_during=10.40 ± 2.78`, DSR=3.73 (reproducible), token_match=0.145 (85% of tokens flipped). Mixed regimes PLASTIC/PARTIAL/DIVERGENT, showing genuine sensitivity without pure runaway. Confidence: **high**.
+- **F19** — **(E6) Projection@64 is large but always destructive.** logit_kl=7.78 ± 4.05, DSR=1.92, token_match=0.20, regimes = all DIVERGENT. Keeping only 64/2048 dims wrecks the hidden state too aggressively — not a controllable intervention. Confidence: **high**.
+- **F20** — **(E6 synthesis) Controller redesign path is now clear.** For Qwen3-1.7B at L27: use `intervention_type=additive` (not scaling), calibrate magnitude against the F13 drift envelope (1.96 ± 0.37), correct by injecting additive delta in the direction that *reduces* measured divergence. Current `control` CLI default is `scaling` which F17 proves is useless at -1. Either add an `additive` mode to control, or move `measure_layer` and `act_layer` to different points so scaling has a chance to act pre-norm.
+
 - **F16** — **(E2 phase C) Per-seed "stable basins" exist.** Factual seed=2 produced identical drift=2.429 and recovery=+0.261 at BOTH mag=0.5 AND mag=0.7 — the 40% magnitude increase wasn't enough to escape that seed's token-choice basin. Only at mag=1.0 did seed=2 shift to drift=2.469, recovery=+0.726. Factual seed=3 was no-propagation at mag=0.5 and 0.7, then drift=1.835 at 1.0 — a per-seed propagation threshold between 0.7 and 1.0. Confidence: **medium** (n=1 observation each).
 
 - **F11** — **(E2 phase B, 10 runs at L27 mag=0.5) H6 partially rejected: late-layer is not universally more stable.** Drift-stability ratio (DSR = mean/stdev across seeds; GPT called this "SNR" but it's 1/CV): factual went L14→L27: 0.89 → 1.26 (slight improvement); procedural went 1.40 → 0.91 (WORSE). Neither prompt crossed the DSR>2 "signal-dominated" threshold. But recovery aggregate DID cleanly improve — Phase A had an outlier-dominated mean of -183 (the -913 seed); Phase B has bounded, interpretable recovery numbers (-1.35 to +0.77) thanks to TD2. Procedural mean recovery shifted from -0.50 at L14 → +0.13 at L27 — real small positive shift. Implication: **prompt type interacts with layer choice**, and the seed-dominated regime F10 identified is NOT trivially escapable by moving layer + magnitude. Confidence: **high**.
@@ -164,12 +165,16 @@ Ordered by data-value _right now_. Tackle top-down unless the human overrides.
 - **Runs**: _(filled as launched)_
 - **Outcome**: _(filled when complete)_
 
-### [ ] E6 — Intervention-type comparison
-- **Status**: pending
-- **Question**: Which intervention class (additive / projection / scaling) produces the largest logit_kl per unit magnitude at the peak-sensitivity layer (from E1)?
-- **Why it's medium value**: informs the controller's choice of what to *do* once it decides to act.
-- **Design**: blocked on E1 (need to know peak layer). Then: 3 types × 3 magnitudes × 3 seeds × 2 prompts at the peak layer.
-- **Blocked on**: E1.
+### [x] E6 — Intervention-type comparison *(complete 2026-04-19)*
+- **Status**: complete
+- **Runs**: 20 stress runs at L27 factual prompt. 4 types × 5 seeds.
+- **Outcome**: Additive wins by a wide margin. Scaling is completely absorbed by the final RMSNorm (F17). See F17–F20.
+- **Ranked by logit_kl_during**:
+  1. additive@1.0: 10.40 ± 2.78 (DSR=3.73) ← winner
+  2. projection@64: 7.78 ± 4.05 (DSR=1.92, all DIVERGENT, too destructive)
+  3. scaling@0.5: 0.00 (no effect)
+  4. scaling@2.0: 0.00 (no effect)
+- **Implication**: controller should use additive, not scaling, for L27 operation.
 
 ### [ ] E9 — Trajectory-deviation-over-time metric
 - **Status**: pending
@@ -219,6 +224,7 @@ _One-line per session. Link to detailed journals in `research/session_*.md` when
 - **2026-04-18 (daemon + E2A session)** · Built warm-model daemon (TD1 complete). Ran E2 phase A — 10 hysteresis runs at L14 mag=0.3. **F3 did not replicate** — only 1–2 of 10 runs showed partial-recovery; the rest were runaway, some with numerically-pathological recovery (F9). Added F9 (recovery metric instability) and F10 (seed-dominated perturbation at these params). Queued TD2 (recovery-metric fix) and TD3 (dashboard daemon integration). Daemon measured 16× speedup on reused requests.
 - **2026-04-18 (TD2 + E2B session)** · Applied TD2: recovery returns `None` when drift<0.05, with `perturbation_did_not_propagate` flag; advisory reads the flag and suggests concrete next params. Added H6 (late-layer is better control surface) from GPT synthesis. Ran E2 phase B at L27 mag=0.5 × 5 seeds × 2 prompts. **H6 partially rejected** (F11): factual DSR improved 0.89→1.26, procedural DSR WORSENED 1.40→0.91. Neither crossed DSR>2 signal-dominated threshold. BUT recovery numbers are now interpretable post-TD2 (F12). Procedural recovery shifted positive at L27. Next step: E2 phase C — magnitude sweep to see if any magnitude escapes the seed-dominated regime.
 - **2026-04-18 (E2C — breakthrough session)** · Ran E2 phase C, 30 runs, magnitude sweep at L27 with {0.5, 0.7, 1.0}. **BREAKTHROUGH**: at (L27, mag=1.0, factual) DSR=5.36 (first reproducible signal in the repo). Added F13 (signal-dominated regime achieved), F14 (prompt-dependent magnitude threshold), F15 (recovery-vs-magnitude trend is prompt-specific), F16 (per-seed stable basins). **Controller work is now unblocked.** Updated §1 next-recommended-action: E6 (intervention-type comparison at L27+mag=1.0) → E8 (controller redesign).
+- **2026-04-19 (E6 — controller root-cause)** · Ran E6, 20 stress runs at L27 factual comparing additive/scaling/projection. **F17: scaling at L27 has ZERO effect** (logit_kl=0.0000 exactly, both at scale=0.5 and scale=2.0) because the final RMSNorm absorbs the scale factor. This EXPLAINS F4 — the controller was doing nothing. F18: additive@1.0 is the winner (kl=10.40, DSR=3.73, 85% tokens flipped). F19: projection@64 is too destructive. F20: controller redesign path is now concrete — use additive, not scaling. Next: E8 (actually code up the additive-based controller).
 
 ---
 
